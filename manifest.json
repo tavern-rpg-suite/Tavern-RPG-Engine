@@ -1,0 +1,9 @@
+{
+    "display_name": "Tavern RPG Engine",
+    "loading_order": 110,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Arkana8",
+    "version": "1.12.0",
+    "homePage": "https://github.com/tavern-rpg-suite/Tavern-RPG-Engine"
+}
