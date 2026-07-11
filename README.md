@@ -4,7 +4,7 @@ A SillyTavern extension that lays a light **RPG layer** over any chat: a **backp
 
 > The hub of the RPG suite. It exposes `window.RPG.inventory`, so other modules plug in: the **Map** opens locked doors with keys from here, and **Vitals** heals you when you eat food from your backpack.
 
-**Version 1.12.0**
+**Version 1.13.0**
 
 ---
 
@@ -15,7 +15,9 @@ A SillyTavern extension that lays a light **RPG layer** over any chat: a **backp
 - 🛠️ **Crafting** — drop two items on the workbench; the model judges whether the combo is logical, then repairs/upgrades the result — or ruins it on a failed roll.
 - 🍎 **Use & eat** — click an item to drop a roll into your next message; on send it rolls against its % and the model narrates the outcome, then consumes it. Food/drink restores HP/satiety in Vitals; "turn into coins" lets the model appraise loot into money.
 - ✉️ **Events & quests** — every *N* messages a short letter arrives with a reward; accept it, play it out, then mark success or failure from the journal.
-- 🔗 **Cross-extension** — `window.RPG.inventory` (`list / get / add / remove`) shared with Map (keys → doors) and Vitals (food → healing).
+- 🖐️ **Drag‑and‑drop crafting** — drag an item straight from the grid onto a workbench slot (click / Shift‑click still work); slots highlight on hover.
+- 🌿 **Foraging quests** — the Vendors module can start ingredient hunts; while one is active, the **magnifier still finds normal loot** and *may also* turn up one of the ingredients you're hunting (a bonus layer, biased by the room/scene — never a replacement).
+- 🔗 **Cross-extension** — `window.RPG.inventory` (`list / get / add / remove / update / coins`) and `window.RPG.quest` (foraging) shared with Map (keys → doors), Vitals (food → healing) and Vendors (ingredients, coins, quests).
 - 🌍 **Bilingual (RU / EN)**; saved per chat with a checkpoint written into the chat itself (a backpack survives even when a solo chat becomes a group).
 
 ## 📦 Install
@@ -42,10 +44,15 @@ Every few messages a letter may arrive in the journal — a small, player-aimed 
 
 ## 🔌 Cross-extension bridge
 
-`window.RPG.inventory`: `isEnabled()`, `list()`, `get(id)`, `add(item)`, `remove(id)`. The Map reads it to spend keys on locked doors; Vitals reads it to heal from food. Safe to call with optional chaining — it's only `available` when the module is enabled.
+`window.RPG.inventory`: `isEnabled()`, `list()`, `get(id)`, `add(item)`, `update(id, fields)`, `remove(id)`, `getCoins()/addCoins(n)/spendCoins(n)`.
+
+`window.RPG.quest` (foraging): `listForage()`, `neededNames()`, `addForage(quest)`, `removeForage(id)`, `markFound(name)`. Vendors starts an ingredient hunt here; the magnifier reads it to occasionally surface a needed ingredient while you search.
+
+Both are safe to call with optional chaining — they're only `available` when the module is enabled.
 
 ## 🩺 Troubleshooting
 
 - **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
 - **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.
 - **Loot, crafting or events do nothing.** They each need a working URL / key / model.
+- **The magnifier only finds ingredients now.** It doesn't — normal loot always rolls first; a hunted ingredient is only an added chance on top.

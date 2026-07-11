@@ -191,6 +191,9 @@
     overflow: hidden; overflow-wrap: anywhere; word-break: break-word;
 }
 .rpg-craft-slot:hover { border-color: #8a3a2e; color: #5a5446; background: rgba(138,58,46,0.05); }
+.rpg-craft-slot.drop-hover { border-color: #8a3a2e; background: rgba(138,58,46,0.14); box-shadow: 0 0 0 2px rgba(138,58,46,0.35) inset; }
+.rpg-item-card[draggable="true"] { cursor: grab; }
+.rpg-item-card.dragging { opacity: 0.45; }
 .rpg-craft-slot.filled {
     border-style: solid; border-color: #c79a2e; color: #33312c;
     background: linear-gradient(180deg, #fdf4d8, #f6ead0);

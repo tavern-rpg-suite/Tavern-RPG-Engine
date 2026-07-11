@@ -9,7 +9,7 @@ const defaultSettings = {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKey: '',
     model: 'google/gemma-4-31b-it',
-    temperature: 0.8,
+    temperature: 0.7,
     eventMinMessages: 10,
     eventMaxMessages: 30,
     injectDepth: 1,
@@ -54,7 +54,7 @@ const I18N = {
         toast_restore: 'Backpack restored from the chat backup!',
         toast_starting: 'Starting items added to your backpack!',
         toast_nothing_here: 'Nothing else to find here.', toast_searching: 'Searching the area...',
-        toast_found_nothing: 'You found nothing.', toast_search_err: 'Search error.',
+        toast_found_nothing: 'You found nothing.', forage_found_desc: 'A foraged ingredient.', toast_search_err: 'Search error.',
         toast_items_added: 'Items added to inventory!',
         toast_craft_impossible: 'Crafting impossible: {reason}',
         toast_craft_ok: 'Success! You crafted: {name}. New chance: {chance}%',
@@ -63,7 +63,7 @@ const I18N = {
         toast_event_err: 'Failed to create an event — check the URL / key / model in the engine settings.',
         toast_event_started: 'Event started! Play it out in the chat.',
         toast_event_ignored: 'You ignored the event.',
-        toast_reward: 'Success! Reward received: {name}!', toast_failed: 'You failed...',
+        toast_reward: 'Success! Reward received: {name}!', toast_failed: 'You failed...', toast_fail_debuff: 'A setback clings to you (debuff applied).', event_fail_debuff_name: 'Setback', event_fail_debuff_eff: 'Shaken by a recent failure — a run of bad luck and lowered footing',
         toast_event_inserted: 'Event added to the input field — edit if you like and send.'
     },
     ru: {
@@ -93,7 +93,7 @@ const I18N = {
         toast_restore: 'Рюкзак восстановлен из резервной копии чата!',
         toast_starting: 'Стартовые предметы добавлены в рюкзак!',
         toast_nothing_here: 'Здесь больше нечего найти.', toast_searching: 'Осматриваю местность...',
-        toast_found_nothing: 'Ты ничего не нашёл.', toast_search_err: 'Ошибка поиска.',
+        toast_found_nothing: 'Ты ничего не нашёл.', forage_found_desc: 'Добытый ингредиент.', toast_search_err: 'Ошибка поиска.',
         toast_items_added: 'Предметы добавлены в инвентарь!',
         toast_craft_impossible: 'Крафт невозможен: {reason}',
         toast_craft_ok: 'Успех! Ты создал: {name}. Новый шанс: {chance}%',
@@ -102,7 +102,7 @@ const I18N = {
         toast_event_err: 'Не удалось создать событие — проверь URL / ключ / модель в настройках движка.',
         toast_event_started: 'Событие началось! Отыграй его в чате.',
         toast_event_ignored: 'Ты проигнорировал событие.',
-        toast_reward: 'Успех! Получена награда: {name}!', toast_failed: 'Ты провалил...',
+        toast_reward: 'Успех! Получена награда: {name}!', toast_failed: 'Ты провалил...', toast_fail_debuff: 'Неудача липнет к тебе (наложен дебаф).', event_fail_debuff_name: 'Неудача', event_fail_debuff_eff: 'Выбит из колеи после провала — полоса невезения и шаткое положение',
         toast_event_inserted: 'Событие добавлено в поле ввода — поправь при желании и отправь.'
     }
 };
@@ -119,7 +119,8 @@ let gameState = {
     messagesUntilEvent: 15,
     activeEvent: null,
     activeDebuff: null,
-    lootGenerated: false
+    lootGenerated: false,
+    forageQuests: [] // ingredient hunts taken from vendors; the loupe can turn these up while foraging
 };
 
 let craftSlotBase = null;
@@ -414,9 +415,46 @@ Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "mi
         const ownedLower = new Set(owned.map(n => String(n).trim().toLowerCase()));
         items = items.filter(it => it && it.name && !ownedLower.has(String(it.name).trim().toLowerCase()));
         if (items.length === 0) { toastr.info(t('toast_found_nothing')); return true; }
+        // BONUS layer: the loupe still finds normal loot above — here it may ALSO turn up one
+        // ingredient you're currently hunting (biased by the room/scene). Never replaces normal loot.
+        try { const forg = rollForageIngredient(messageText); if (forg) items.push(forg); } catch (e) { /* ignore */ }
         showLootPopup(items);
         return true;
     } catch (e) { console.error('Loot scan error:', e); toastr.error(t('toast_search_err')); return false; }
+}
+
+// remove a finished/again-unwanted forage quest
+function removeForageQuest(id) { gameState.forageQuests = (gameState.forageQuests || []).filter(q => q.id !== id); saveGameState(); }
+
+// Roll whether THIS scan turns up a needed ingredient. Returns a loot item or null.
+// With the map on, being in (or the scene naming) the ingredient's room greatly raises the odds;
+// with no map, it falls back to base skill chance + whether the scene names the ingredient.
+function rollForageIngredient(messageText) {
+    const quests = gameState.forageQuests || [];
+    if (!quests.length) return null;
+    const pending = [];
+    quests.forEach(q => (q.ingredients || []).forEach(ing => { if (!ing.got) pending.push({ q, ing }); }));
+    if (!pending.length) return null;
+    const map = (window.RPG && window.RPG.map && window.RPG.map.available && window.RPG.map.isEnabled()) ? window.RPG.map : null;
+    const cur = map ? map.getCurrent() : null;
+    const txt = String(messageText || '').toLowerCase();
+    let best = null, bestChance = -1;
+    pending.forEach(p => {
+        let chance = p.q.chance || 25;
+        const rk = String(p.ing.roomKey || '').toLowerCase();
+        if (rk) {
+            if (cur && cur.room && cur.room.toLowerCase() === rk) chance += 45;   // standing in the right room
+            else if (txt.includes(rk)) chance += 22;                              // the scene names the room
+            else chance = Math.max(6, chance - 18);                               // wrong place → slim
+        }
+        if (p.ing.name && txt.includes(String(p.ing.name).toLowerCase())) chance += 30; // scene names the item itself
+        if (chance > bestChance) { bestChance = chance; best = p; }
+    });
+    if (!best) return null;
+    if (Math.random() * 100 >= Math.min(92, bestChance)) return null; // this scan missed
+    best.ing.got = true;
+    if ((best.q.ingredients || []).every(x => x.got)) removeForageQuest(best.q.id); else saveGameState();
+    return { name: best.ing.name, desc: best.ing.desc || t('forage_found_desc'), type: 'material', weight: 0.2 };
 }
 
 function showLootPopup(items) {
@@ -497,6 +535,20 @@ function renderMainUI() {
         makeModalDraggable(document.getElementById('rpg-inventory-modal'), document.getElementById('rpg-inv-drag'));
         makeModalDraggable(document.getElementById('rpg-quest-modal'), document.getElementById('rpg-quest-drag'));
         window.addEventListener('resize', () => { if ($('#rpg-quest-modal').hasClass('visible')) fitLetter(); });
+        // drag an item from the grid straight onto a workbench slot (click / Shift+click still work)
+        [['#rpg-slot-base', 'base'], ['#rpg-slot-mat', 'mat']].forEach(([sel, which]) => {
+            const el = document.querySelector(sel); if (!el) return;
+            el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop-hover'); });
+            el.addEventListener('dragleave', () => el.classList.remove('drop-hover'));
+            el.addEventListener('drop', (e) => {
+                e.preventDefault(); el.classList.remove('drop-hover');
+                const id = e.dataTransfer.getData('text/plain'); if (!id) return;
+                const item = (gameState.inventory || []).find(i => i.id === id); if (!item) return;
+                if (which === 'base') { craftSlotBase = item; if (craftSlotMaterial && craftSlotMaterial.id === item.id) craftSlotMaterial = null; }
+                else { if (craftSlotBase && craftSlotBase.id === item.id) return; craftSlotMaterial = item; }
+                updateCraftZone();
+            });
+        });
     }
 
     if (!settings.enabled) { 
@@ -547,7 +599,7 @@ function updateInventoryGrid() {
     grid.append(head);
     
     gameState.inventory.forEach((item, index) => {
-        const card = $(`<div class="rpg-item-card" data-id="${item.id}" title="${t('card_title')}">
+        const card = $(`<div class="rpg-item-card" data-id="${item.id}" draggable="true" title="${t('card_title')}">
                 <i class="fa-solid fa-trash rpg-item-delete" title="${t('discard')}"></i>
                 <span class="rpg-item-name">${escapeHtml(item.name)}</span>
                 <span class="rpg-item-desc">${escapeHtml(item.desc)}</span>
@@ -556,6 +608,8 @@ function updateInventoryGrid() {
                 <i class="fa-solid fa-mug-hot rpg-item-eat" title="${escapeHtml(t('use_item'))}"></i>
                 <i class="fa-solid fa-coins rpg-item-tocoins" title="${escapeHtml(t('to_coins'))}"></i>
             </div>`);
+        card[0].addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'copy'; card.addClass('dragging'); });
+        card[0].addEventListener('dragend', () => card.removeClass('dragging'));
         card.find('.rpg-item-tocoins').on('click', (e) => { e.stopPropagation(); convertToCoins(item, index); });
         card.find('.rpg-item-eat').on('click', (e) => { e.stopPropagation(); useConsumable(item, index); });
 
@@ -710,14 +764,21 @@ Output strictly JSON:
 }`;
         
         const result = await callAI(sysPrompt, `History:\n${recentHistory}`);
-        
+
+        const title = String((result && result.title) || '').trim();
+        const desc = String((result && result.desc) || '').trim();
+        if (!title || !desc) { // model returned an empty/partial event — don't show a blank card, just retry soon
+            gameState.messagesUntilEvent = 2; saveGameState();
+            return;
+        }
+        const rw = result.reward_item;
         gameState.activeEvent = {
-            title: result.title,
-            desc: result.desc,
-            reward: result.reward_item,
-            status: 'new' 
+            title,
+            desc,
+            reward: (rw && rw.name) ? rw : null,
+            status: 'new'
         };
-        
+
         gameState.messagesUntilEvent = Math.floor(Math.random() * (settings.eventMaxMessages - settings.eventMinMessages)) + settings.eventMinMessages;
         saveGameState(); renderQuestPanelContent();
         $('#rpg-quest-badge').addClass('active'); toastr.info(t('toast_new_event'));
@@ -848,7 +909,13 @@ function renderQuestPanelContent() {
         });
         $('#rpg-q-fail').on('click', () => {
             toastr.error(t('toast_failed'));
-            gameState.activeDebuff = `Player failed the current event and is suffering a minor setback or bad luck in the current situation.`;
+            const v = (window.RPG && window.RPG.vitals && window.RPG.vitals.available) ? window.RPG.vitals : null;
+            if (v && typeof v.addBuff === 'function') {
+                v.addBuff({ name: t('event_fail_debuff_name'), effect: t('event_fail_debuff_eff'), kind: 'debuff', duration: 4 });
+                toastr.info(t('toast_fail_debuff'));
+            } else {
+                gameState.activeDebuff = `Player failed the current event and is suffering a minor setback or bad luck in the current situation.`;
+            }
             clearEvent(); $('#rpg-quest-modal').removeClass('visible');
         });
     }
@@ -1069,4 +1136,32 @@ window.RPG.inventory = {
     addCoins: (n) => { gameState.coins = Math.max(0, (gameState.coins || 0) + Math.round(n || 0)); saveGameState(); updateInventoryGrid(); return gameState.coins; },
     spendCoins: (n) => { n = Math.round(n || 0); if ((gameState.coins || 0) < n) return false; gameState.coins -= n; saveGameState(); updateInventoryGrid(); return true; },
     refresh: () => { loadGameState(); updateInventoryGrid(); }
+};
+
+// ------------------------------------------------------------
+// Foraging quests — Vendors starts an ingredient hunt; the loupe (scanMessageForLoot)
+// can then turn those ingredients up while you search messages. The loupe keeps finding
+// normal loot too — ingredients are only an added chance on top.
+// ------------------------------------------------------------
+window.RPG.quest = {
+    available: true,
+    isEnabled: () => !!settings.enabled,
+    listForage: () => (gameState.forageQuests || []).map(q => ({ id: q.id, vendorName: q.vendorName, skill: q.skill, chance: q.chance, ingredients: (q.ingredients || []).map(i => ({ name: i.name, where: i.where, roomKey: i.roomKey, got: !!i.got })) })),
+    neededNames: () => { const out = []; (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got) out.push(i.name); })); return out; },
+    addForage: (q) => {
+        if (!q || !Array.isArray(q.ingredients) || !q.ingredients.length) return null;
+        if (!Array.isArray(gameState.forageQuests)) gameState.forageQuests = [];
+        const ings = q.ingredients
+            .map(i => ({ name: String(i.name || '').slice(0, 50), where: String(i.where || '').slice(0, 80), roomKey: String(i.roomKey || '').slice(0, 50), desc: String(i.desc || '').slice(0, 120), got: false }))
+            .filter(i => i.name);
+        if (!ings.length) return null;
+        const quest = { id: genId(), vendorName: String(q.vendorName || '').slice(0, 40), skill: String(q.skill || '').slice(0, 40), chance: Math.max(6, Math.min(80, parseInt(q.chance) || 25)), ingredients: ings };
+        // merge into an existing hunt from the same vendor instead of stacking duplicates
+        const prev = gameState.forageQuests.find(x => x.vendorName === quest.vendorName && x.skill === quest.skill);
+        if (prev) { const have = new Set(prev.ingredients.map(i => i.name.toLowerCase())); ings.forEach(i => { if (!have.has(i.name.toLowerCase())) prev.ingredients.push(i); }); prev.chance = quest.chance; saveGameState(); return { id: prev.id, count: prev.ingredients.filter(i => !i.got).length }; }
+        gameState.forageQuests.push(quest); saveGameState();
+        return { id: quest.id, count: ings.length };
+    },
+    removeForage: (id) => removeForageQuest(id),
+    markFound: (name) => { const k = String(name || '').toLowerCase(); let ch = false; (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got && i.name.toLowerCase() === k) { i.got = true; ch = true; } })); if (ch) { gameState.forageQuests = gameState.forageQuests.filter(q => (q.ingredients || []).some(i => !i.got)); saveGameState(); } return ch; }
 };
