@@ -52,6 +52,7 @@ Both are safe to call with optional chaining — they're only `available` when t
 
 ## 🩺 Troubleshooting
 
+- **Equipped gear lost its grade after unequip/re‑equip.** Fixed in 1.13.3 — the backpack now keeps equipment‑only fields (`grade`, `armour`, `attack`, and field‑patch charges) when an item is stored and listed, so re‑equipping no longer re‑rolls its quality. Needs the Equipment module too.
 - **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
 - **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.
 - **Loot, crafting or events do nothing.** They each need a working URL / key / model.

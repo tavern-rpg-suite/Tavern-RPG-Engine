@@ -144,6 +144,11 @@ function normItem(item, chance) {
     if (typeof item.heal === 'number' && item.heal > 0) out.heal = item.heal;
     if (typeof item.food === 'number' && item.food > 0) out.food = item.food;
     if (item.buff && item.buff.name) out.buff = { name: String(item.buff.name), effect: String(item.buff.effect || ''), kind: item.buff.kind === 'debuff' ? 'debuff' : 'buff', duration: (typeof item.buff.duration === 'number' && item.buff.duration > 0) ? item.buff.duration : null };
+    if (typeof item.dur === 'number') { out.dur = item.dur; out.max = (typeof item.max === 'number') ? item.max : item.dur; out.broken = !!item.broken; }
+    if (typeof item.grade === 'number') out.grade = item.grade;
+    if (typeof item.armor === 'number') out.armor = item.armor;
+    if (typeof item.attack === 'number') out.attack = item.attack;
+    if (typeof item.patchesLeft === 'number') out.patchesLeft = item.patchesLeft;
     return out;
 }
 function applyConsumable(item, eff) {
@@ -1076,7 +1081,7 @@ window.RPG = window.RPG || {};
 window.RPG.inventory = {
     available: true,
     isEnabled: () => !!settings.enabled,
-    list: () => Array.isArray(gameState.inventory) ? gameState.inventory.map(i => ({ id: i.id, name: i.name, desc: i.desc, chance: i.chance, type: i.type, weight: i.weight, heal: i.heal, food: i.food, buff: i.buff, dur: i.dur, max: i.max, broken: i.broken, cond: i.cond })) : [],
+    list: () => Array.isArray(gameState.inventory) ? gameState.inventory.map(i => ({ id: i.id, name: i.name, desc: i.desc, chance: i.chance, type: i.type, weight: i.weight, heal: i.heal, food: i.food, buff: i.buff, dur: i.dur, max: i.max, broken: i.broken, cond: i.cond, grade: i.grade, armor: i.armor, attack: i.attack, patchesLeft: i.patchesLeft })) : [],
     get: (id) => (gameState.inventory || []).find(i => i.id === id) || null,
     remove: (id) => {
         const idx = (gameState.inventory || []).findIndex(i => i.id === id);
@@ -1091,6 +1096,11 @@ window.RPG.inventory = {
         if (typeof item.food === 'number' && item.food > 0) it.food = item.food;
         if (item.buff && item.buff.name) it.buff = { name: String(item.buff.name), effect: String(item.buff.effect || ''), kind: item.buff.kind === 'debuff' ? 'debuff' : 'buff', duration: (typeof item.buff.duration === 'number' && item.buff.duration > 0) ? item.buff.duration : null };
         if (typeof item.dur === 'number') { it.dur = item.dur; it.max = (typeof item.max === 'number') ? item.max : item.dur; it.broken = !!item.broken; }
+        // preserve equipment-only fields so gear keeps its quality/stats through a backpack round-trip
+        if (typeof item.grade === 'number') it.grade = item.grade;
+        if (typeof item.armor === 'number') it.armor = item.armor;
+        if (typeof item.attack === 'number') it.attack = item.attack;
+        if (typeof item.patchesLeft === 'number') it.patchesLeft = item.patchesLeft;
         gameState.inventory.push(it);
         saveGameState(); updateInventoryGrid();
         return it;
