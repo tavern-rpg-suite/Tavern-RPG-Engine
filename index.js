@@ -126,6 +126,98 @@ let gameState = {
 let craftSlotBase = null;
 let craftSlotMaterial = null;
 
+// ============================================================
+// CHAT OWNERSHIP — the backpack belongs to exactly ONE chat.
+// Without this, a save fired while SillyTavern is still swapping chats writes the
+// previous chat's backpack into the new chat (and into the new chat's first message
+// as a "checkpoint"), which is how items started cloning themselves between chats
+// of the same character.
+// ============================================================
+let currentChatId = null;   // the chat gameState in memory actually belongs to
+let pendingChatId = null;   // id handed to us by CHAT_CHANGED, before we (re)load
+let stateReady = false;     // false while switching chats — nothing may be saved
+
+function freshGameState() {
+    const lo = Math.max(1, parseInt(settings.eventMinMessages) || 10);
+    const hi = Math.max(lo + 1, parseInt(settings.eventMaxMessages) || 30);
+    return {
+        inventory: [],
+        coins: 0,
+        messagesUntilEvent: Math.floor(Math.random() * (hi - lo)) + lo,
+        activeEvent: null,
+        activeDebuff: null,
+        lootGenerated: false,
+        forageQuests: []
+    };
+}
+function cloneState(s) { try { return JSON.parse(JSON.stringify(s)); } catch (e) { return s; } }
+function sanitizeState(s) {
+    if (!s || typeof s !== 'object') return freshGameState();
+    if (!Array.isArray(s.inventory)) s.inventory = [];
+    if (!Array.isArray(s.forageQuests)) s.forageQuests = [];
+    if (typeof s.coins !== 'number') s.coins = 0;
+    const seen = new Set();               // drop exact duplicates (same id twice) left by older versions
+    s.inventory = s.inventory.filter(it => {
+        if (!it || typeof it !== 'object' || !it.name) return false;
+        if (!it.id) it.id = genId();
+        if (seen.has(it.id)) return false;
+        seen.add(it.id); return true;
+    });
+    return s;
+}
+// still on the chat this state came from? (guards anything that awaited an AI call)
+function ownsChat(id) { return !!(stateReady && id && currentChatId === id && getContext().chatId === id); }
+// other modules (Equipment / Vitals / Map / Vendors) can call the bridge before CHAT_CHANGED
+// has switched us over — make sure we hold the right chat's backpack before touching it
+function syncChat() {
+    const id = pendingChatId || getContext().chatId;
+    if (!id) return;
+    if (!stateReady || id !== currentChatId) loadGameState(id);
+}
+
+// ============================================================
+// TOLERANT INGREDIENT NAME MATCHING
+// The model never spells a thing the same way twice: a hunt asks for "сплав серы",
+// the loupe hands you "серный сплав", and the workbench then refuses the craft.
+// We compare a normalised, stemmed, order-independent key instead of raw strings.
+// ============================================================
+const ING_STOP = new Set([
+    'of', 'the', 'a', 'an', 'and', 'with', 'from', 'for',
+    'из', 'для', 'и', 'с', 'со', 'на', 'в', 'от',
+    // generic packaging / portion words that carry no identity
+    'кусок', 'кусочек', 'обломок', 'осколок', 'щепотка', 'горсть', 'немного', 'штука', 'порция', 'пучок',
+    'piece', 'chunk', 'bit', 'pinch', 'handful', 'portion', 'bunch', 'lump'
+]);
+const ING_GRAM = ['ического', 'ическая', 'ически', 'ами', 'ями', 'ого', 'ему', 'ому', 'ыми', 'ими', 'ies', 'ах', 'ях', 'ов', 'ев', 'ей', 'ой', 'ый', 'ий', 'ая', 'яя', 'ое', 'ее', 'ые', 'ие', 'ым', 'им', 'ых', 'их', 'ом', 'ем', 'ую', 'юю', 'ся', 'es', 'а', 'я', 'ы', 'и', 'у', 'ю', 'е', 'о', 'ь', 'й', 's'];
+const ING_DERIV = ['ическ', 'енн', 'инн', 'ян', 'ан', 'ск', 'ов', 'ев', 'н'];
+function ingCut(w, list) {
+    for (const s of list) if (w.length - s.length >= 3 && w.endsWith(s)) return w.slice(0, -s.length);
+    return w;
+}
+function ingStem(w) {
+    if (w.length <= 3) return w;
+    let x = ingCut(w, ING_GRAM);
+    x = ingCut(x, ING_DERIV);
+    x = ingCut(x, ING_GRAM);
+    return x;
+}
+// "Серный сплав" and "сплав серы (кусок)" both collapse to "сер|сплав"
+function ingKey(name) {
+    const words = String(name || '')
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/\(.*?\)/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim()
+        .split(/\s+/)
+        .filter(w => w && !ING_STOP.has(w))
+        .map(ingStem)
+        .filter(Boolean);
+    if (!words.length) return String(name || '').trim().toLowerCase();
+    return words.sort().join('|');
+}
+function sameIng(a, b) { return !!a && !!b && ingKey(a) === ingKey(b); }
+
 // Unique item ID generator (avoids deletion bugs)
 function genId() { return Math.random().toString(36).substr(2, 9); }
 
@@ -191,6 +283,7 @@ async function useConsumable(item, index) {
     }
     // otherwise ask the model whether it can be eaten/drunk and what it does
     if (!settings.apiKey) { toastr.warning(t('tc_err')); return; }
+    const myChat = currentChatId;
     toastr.info(t('uc_checking'));
     try {
         const sys = `You decide whether an item could be EATEN or DRUNK by a person right now, and its effect.
@@ -199,6 +292,7 @@ Only food, drink, medicine, potions, tonics and the like are consumable. A tool,
 If consumable, give effects: "heal" (HP restored, 0-60), "food" (satiety restored, 0-50), and optionally a "buff" {"name","effect","duration" in turns}. Use what fits (bread feeds, a potion heals, a tonic buffs). Use 0 where not applicable.
 Respond strictly JSON: {"is_consumable": true/false, "heal": 0, "food": 0, "buff": null, "reason": "<one short sentence in ${genLang()}>"}`;
         const res = await callAI(sys, 'Judge the item.');
+        if (!ownsChat(myChat)) return;
         if (!res || !res.is_consumable) { toastr.warning(t('uc_no', { name: item.name, reason: (res && res.reason) || '' })); return; }
         const eff = {
             heal: Math.max(0, parseInt(res.heal) || 0),
@@ -215,6 +309,7 @@ Respond strictly JSON: {"is_consumable": true/false, "heal": 0, "food": 0, "buff
 }
 async function convertToCoins(item, index) {
     if (!settings.apiKey) { toastr.warning(t('tc_err')); return; }
+    const myChat = currentChatId;
     toastr.info(t('tc_checking'));
     try {
         const sys = `You decide whether an item a player holds IS money — currency or a direct store of monetary value they could simply pocket as coins WITHOUT needing a buyer (coins, banknotes, a coin purse, loose gold/silver, gems, bullion, a valuable ring). A regular tool, weapon, food or piece of clothing is NOT money — those must be sold to a vendor, not converted.
@@ -222,6 +317,7 @@ Item: "${item.name}" (${item.desc || 'no description'}), type "${item.type || 'm
 If it is money/valuables, give how many coins it becomes (be reasonable: a few loose coins ~1-15, a fat purse ~30-80, a gem ~20-120). If it is not money, set is_money false.
 Respond strictly JSON: {"is_money": true/false, "coins": <integer>, "reason": "<one short sentence in ${genLang()}>"}`;
         const res = await callAI(sys, 'Judge the item.');
+        if (!ownsChat(myChat)) return;
         if (res && res.is_money) {
             const n = Math.max(1, parseInt(res.coins) || 1);
             gameState.coins = Math.max(0, (gameState.coins || 0) + n);
@@ -246,21 +342,34 @@ function saveSettings() {
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
 }
 
-function loadGameState() {
+function loadGameState(explicitId) {
     const context = getContext();
-    const chatId = context.chatId;
-    if (!chatId) return;
-    
+    const chatId = explicitId || pendingChatId || context.chatId;
+    if (!chatId) {
+        // no chat open: hold nothing, so nothing can be written into the next chat we land in
+        currentChatId = null; pendingChatId = null; stateReady = false;
+        gameState = freshGameState();
+        return;
+    }
+
+    // claim the chat BEFORE anything else can save — a stale backpack can never land here now
+    currentChatId = chatId; pendingChatId = null; stateReady = true;
+
     if (settings.chatStates[chatId]) {
-        gameState = settings.chatStates[chatId];
+        gameState = sanitizeState(settings.chatStates[chatId]);
+        settings.chatStates[chatId] = gameState;
     } else {
-        // Restore the backpack from the chat backup (when converting to a group!)
+        // Restore the backpack from the chat backup (when converting to a group, or branching).
+        // A brand-new chat holds nothing but the greeting — it is not a copy of anything, so we
+        // never "restore" into it. That guard is what stops a fresh chat from inheriting the
+        // previous chat's backpack when a checkpoint got written during the switch.
         const chat = context.chat;
         let restored = false;
-        if (chat && chat.length > 0) {
+        if (chat && chat.length > 1) {
             for (let i = chat.length - 1; i >= 0; i--) {
-                if (chat[i].extra && chat[i].extra.rpg_inventory_checkpoint) {
-                    gameState = chat[i].extra.rpg_inventory_checkpoint;
+                const cp = chat[i].extra && chat[i].extra.rpg_inventory_checkpoint;
+                if (cp) {
+                    gameState = sanitizeState(cloneState(cp));   // a COPY: never share objects with the chat file
                     settings.chatStates[chatId] = gameState;
                     saveSettings();
                     restored = true;
@@ -270,14 +379,7 @@ function loadGameState() {
             }
         }
         if (!restored) {
-            gameState = {
-                inventory: [],
-                coins: 0,
-                messagesUntilEvent: Math.floor(Math.random() * (settings.eventMaxMessages - settings.eventMinMessages)) + settings.eventMinMessages,
-                activeEvent: null,
-                activeDebuff: null,
-                lootGenerated: false
-            };
+            gameState = freshGameState();
             settings.chatStates[chatId] = gameState;
         }
     }
@@ -287,21 +389,22 @@ function loadGameState() {
     renderQuestPanelContent();
     updateContextInjection();
     restoreMagnifyingGlasses();
+    updateInventoryGrid();
 }
 
 function saveGameState() {
+    if (!stateReady || !currentChatId) return;          // mid-switch: write nowhere
     const context = getContext();
-    const chatId = context.chatId;
-    if (!chatId) return;
-    settings.chatStates[chatId] = gameState;
+    if (context.chatId && context.chatId !== currentChatId) return;  // ST already moved on — this belongs to a chat we left
+    settings.chatStates[currentChatId] = gameState;
     saveSettings();
-    
-    // Save the backpack backup into the last message
+
+    // Save the backpack backup into the last message — as a private COPY, never a live reference
     const chat = context.chat;
     if (chat && chat.length > 0) {
         const lastMsg = chat[chat.length - 1];
         if (!lastMsg.extra) lastMsg.extra = {};
-        lastMsg.extra.rpg_inventory_checkpoint = gameState;
+        lastMsg.extra.rpg_inventory_checkpoint = cloneState(gameState);
         saveChatDebounced();
     }
 }
@@ -342,6 +445,7 @@ function calculateChance() {
 async function generateStartingLoot() {
     if (!settings.enabled || gameState.inventory.length > 0) return;
     const context = getContext();
+    const myChat = currentChatId;                       // the chat this loot is being rolled for
     let lore = context.characterId !== undefined && characters[context.characterId] ? characters[context.characterId].description || "" : "";
     const firstMessage = context.chat[0]?.mes || "";
 
@@ -360,6 +464,7 @@ Story Start: ${firstMessage.substring(0, 500)}
 Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type": "misc", "weight": 1}]}`;
 
         const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`);
+        if (!ownsChat(myChat)) return;                  // user switched chats while the model was thinking
         result.items.forEach(item => {
             gameState.inventory.push(normItem(item));
         });
@@ -405,24 +510,37 @@ function addMagnifyingGlass() {
 function restoreMagnifyingGlasses() { $('.rpg-loot-btn').remove(); addMagnifyingGlass(); }
 
 async function scanMessageForLoot(messageText) {
+    const myChat = currentChatId;
     try {
         const owned = (gameState.inventory || []).map(i => i.name).filter(Boolean);
         const ownedList = owned.length ? owned.slice(0, 80).join(', ') : '—';
+        const hunted = forageNeededNames();
+        // Tell the model the EXACT wording of the ingredients we are hunting. Left to itself it
+        // invents a near-synonym ("серный сплав" for "сплав серы") and the workbench then refuses it.
+        const huntBlock = hunted.length
+            ? `\nThe player is currently hunting these ingredients: ${hunted.join(', ')}.\nIf an item you find is essentially one of them, you MUST copy that name CHARACTER FOR CHARACTER — do not rephrase, re-order or re-decline it.`
+            : '';
         const sysPrompt = `Analyze the provided text. Find 1 or 2 small, logical items the player could pick up. 
 Some items can be broken, dirty, or damaged to encourage crafting. 
 Do NOT make up impossible items. All names and descriptions MUST be in ${genLang()}. If nothing logical exists, return an empty array.
-IMPORTANT: Do NOT offer items the player ALREADY HAS or has already picked up — avoid duplicates of the owned items listed below (skip anything with the same or an obviously equivalent name).
+IMPORTANT: Do NOT offer items the player ALREADY HAS or has already picked up — avoid duplicates of the owned items listed below (skip anything with the same or an obviously equivalent name).${huntBlock}
 Give each item a "type" (weapon, armor, clothing, material, food, consumable, misc) and a REALISTIC "weight" in kg for the real object (a coin ~0.01, a knife ~0.3, an iron poker ~2-3, armor ~10+). Do not just use 1 for everything.
 Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "misc", "weight": 1}]}`;
         const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`);
+        if (!ownsChat(myChat)) return false;            // chat switched while the model was thinking
         let items = Array.isArray(result.items) ? result.items : [];
-        // safety net: drop anything whose name already matches an owned item (case-insensitive)
-        const ownedLower = new Set(owned.map(n => String(n).trim().toLowerCase()));
-        items = items.filter(it => it && it.name && !ownedLower.has(String(it.name).trim().toLowerCase()));
+        // second net: if the model still renamed a hunted ingredient, snap it back to the exact wording
+        items.forEach(it => { if (it && it.name) { const c = forageCanonName(it.name); if (c) it.name = c; } });
+        // safety net: drop anything whose name already matches an owned item (tolerant, not just literal)
+        const ownedKeys = new Set(owned.map(ingKey));
+        items = items.filter(it => it && it.name && !ownedKeys.has(ingKey(it.name)));
         if (items.length === 0) { toastr.info(t('toast_found_nothing')); return true; }
         // BONUS layer: the loupe still finds normal loot above — here it may ALSO turn up one
         // ingredient you're currently hunting (biased by the room/scene). Never replaces normal loot.
-        try { const forg = rollForageIngredient(messageText); if (forg) items.push(forg); } catch (e) { /* ignore */ }
+        try {
+            const forg = rollForageIngredient(messageText);
+            if (forg && !items.some(it => sameIng(it.name, forg.name))) items.push(forg);
+        } catch (e) { /* ignore */ }
         showLootPopup(items);
         return true;
     } catch (e) { console.error('Loot scan error:', e); toastr.error(t('toast_search_err')); return false; }
@@ -430,6 +548,36 @@ Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "mi
 
 // remove a finished/again-unwanted forage quest
 function removeForageQuest(id) { gameState.forageQuests = (gameState.forageQuests || []).filter(q => q.id !== id); saveGameState(); }
+
+// ---- forage helpers (all name comparisons go through the tolerant matcher) ----
+function forageNeededNames() {
+    const out = [];
+    (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got) out.push(i.name); }));
+    return out;
+}
+// if `name` is essentially an ingredient we are hunting, give back its EXACT catalogued spelling
+function forageCanonName(name) {
+    if (!name) return null;
+    const k = ingKey(name);
+    let hit = null;
+    (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => {
+        if (!hit && !i.got && ingKey(i.name) === k) hit = i.name;
+    }));
+    return hit;
+}
+// mark a hunted ingredient as obtained — called when the player actually TAKES the item
+function markForageFound(name) {
+    const k = ingKey(name);
+    let changed = false;
+    (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => {
+        if (!i.got && ingKey(i.name) === k) { i.got = true; changed = true; }
+    }));
+    if (changed) {
+        gameState.forageQuests = (gameState.forageQuests || []).filter(q => (q.ingredients || []).some(i => !i.got));
+        saveGameState();
+    }
+    return changed;
+}
 
 // Roll whether THIS scan turns up a needed ingredient. Returns a loot item or null.
 // With the map on, being in (or the scene naming) the ingredient's room greatly raises the odds;
@@ -457,8 +605,9 @@ function rollForageIngredient(messageText) {
     });
     if (!best) return null;
     if (Math.random() * 100 >= Math.min(92, bestChance)) return null; // this scan missed
-    best.ing.got = true;
-    if ((best.q.ingredients || []).every(x => x.got)) removeForageQuest(best.q.id); else saveGameState();
+    // NOTE: the ingredient is NOT ticked off here — it is only counted once the player actually
+    // takes it from the loot popup (see showLootPopup). Ticking it here lost the ingredient forever
+    // if the player pressed "Leave".
     return { name: best.ing.name, desc: best.ing.desc || t('forage_found_desc'), type: 'material', weight: 0.2 };
 }
 
@@ -490,11 +639,16 @@ function showLootPopup(items) {
     // tap a card to include/exclude it
     $('#rpg-loot-list .rpg-loot-card').off('click').on('click', function () { $(this).toggleClass('selected'); });
 
+    const myChat = currentChatId;
     $('#rpg-loot-take').off('click').on('click', () => {
+        if (!ownsChat(myChat)) { popup.fadeOut(); return; }   // loot belongs to the chat it was found in
         const chosen = [];
         $('#rpg-loot-list .rpg-loot-card.selected').each(function () { chosen.push(generatedItems[parseInt($(this).data('idx'))]); });
         if (chosen.length === 0) { popup.fadeOut(); return; }
-        gameState.inventory.push(...chosen); saveGameState(); updateInventoryGrid(); popup.fadeOut(); toastr.success(t('toast_items_added'));
+        gameState.inventory.push(...chosen);
+        // tick off any foraging hunt this actually satisfies (tolerant name match)
+        chosen.forEach(it => markForageFound(it.name));
+        saveGameState(); updateInventoryGrid(); popup.fadeOut(); toastr.success(t('toast_items_added'));
     });
     $('#rpg-loot-leave').off('click').on('click', () => popup.fadeOut());
 }
@@ -648,6 +802,7 @@ function updateCraftZone() {
 
 async function processCraft() {
     if (!craftSlotBase || !craftSlotMaterial) return;
+    const myChat = currentChatId;
     $('#rpg-craft-action').prop('disabled', true).text(t('ai_analysis'));
 
     try {
@@ -661,6 +816,7 @@ Output strictly JSON:
 { "logical": true/false, "reason": "Short explanation", "newName": "New improved name", "newDesc": "New description" }`;
 
         const result = await callAI(sysPrompt, "Is this craft logical? Provide new name and desc.");
+        if (!ownsChat(myChat)) { craftSlotBase = null; craftSlotMaterial = null; updateCraftZone(); $('#rpg-craft-action').text(t('upgrade_item')); return; }
 
         if (!result.logical) {
             toastr.error(t('toast_craft_impossible', {reason: result.reason}));
@@ -753,6 +909,7 @@ async function checkEventTrigger() {
 }
 
 async function generateRandomEvent() {
+    const myChat = currentChatId;
     try {
         const context = getContext();
         const chat = context.chat;
@@ -769,6 +926,7 @@ Output strictly JSON:
 }`;
         
         const result = await callAI(sysPrompt, `History:\n${recentHistory}`);
+        if (!ownsChat(myChat)) return;
 
         const title = String((result && result.title) || '').trim();
         const desc = String((result && result.desc) || '').trim();
@@ -1061,10 +1219,17 @@ jQuery(() => {
         renderMainUI();
     }
 
-    eventSource.on(event_types.CHAT_CHANGED, () => {
+    eventSource.on(event_types.CHAT_CHANGED, (chatIdArg) => {
+        // Drop the old chat's backpack IMMEDIATELY. Other modules (Equipment, Vitals, Map, Vendors)
+        // also react to this event, and if any of them touches window.RPG.inventory before we have
+        // switched over, the previous chat's items would be saved into the new chat.
+        stateReady = false;
+        currentChatId = null;
+        pendingChatId = chatIdArg || null;
+        gameState = freshGameState();
         // wait until ST switches chatId, otherwise the previous chat state is loaded
         setTimeout(() => {
-            loadGameState();
+            loadGameState(pendingChatId || getContext().chatId);
             renderMainUI();
         }, 100);
     });
@@ -1078,12 +1243,15 @@ jQuery(() => {
 // Safe no-op for anyone who doesn't use it.
 // ============================================================
 window.RPG = window.RPG || {};
+// shared tolerant name matcher — Vendors & co. can reuse the exact same rules
+window.RPG.match = { key: (n) => ingKey(n), same: (a, b) => sameIng(a, b) };
 window.RPG.inventory = {
     available: true,
     isEnabled: () => !!settings.enabled,
-    list: () => Array.isArray(gameState.inventory) ? gameState.inventory.map(i => ({ id: i.id, name: i.name, desc: i.desc, chance: i.chance, type: i.type, weight: i.weight, heal: i.heal, food: i.food, buff: i.buff, dur: i.dur, max: i.max, broken: i.broken, cond: i.cond, grade: i.grade, armor: i.armor, attack: i.attack, patchesLeft: i.patchesLeft })) : [],
-    get: (id) => (gameState.inventory || []).find(i => i.id === id) || null,
+    list: () => (syncChat(), Array.isArray(gameState.inventory)) ? gameState.inventory.map(i => ({ id: i.id, name: i.name, desc: i.desc, chance: i.chance, type: i.type, weight: i.weight, heal: i.heal, food: i.food, buff: i.buff, dur: i.dur, max: i.max, broken: i.broken, cond: i.cond, grade: i.grade, armor: i.armor, attack: i.attack, patchesLeft: i.patchesLeft })) : [],
+    get: (id) => { syncChat(); return (gameState.inventory || []).find(i => i.id === id) || null; },
     remove: (id) => {
+        syncChat();
         const idx = (gameState.inventory || []).findIndex(i => i.id === id);
         if (idx < 0) return null;
         const removed = gameState.inventory.splice(idx, 1)[0];
@@ -1091,6 +1259,7 @@ window.RPG.inventory = {
         return removed;
     },
     add: (item) => {
+        syncChat();
         const it = { id: genId(), name: item.name, desc: item.desc || '', chance: typeof item.chance === 'number' ? item.chance : calculateChance(), type: ITEM_TYPES.includes(item.type) ? item.type : 'misc', weight: (typeof item.weight === 'number' && item.weight > 0) ? item.weight : defaultWeight(ITEM_TYPES.includes(item.type) ? item.type : 'misc') };
         if (typeof item.heal === 'number' && item.heal > 0) it.heal = item.heal;
         if (typeof item.food === 'number' && item.food > 0) it.food = item.food;
@@ -1107,6 +1276,7 @@ window.RPG.inventory = {
     },
     // raise an inventory item's durability (amount = percent of max; null = full)
     repair: (id, amount) => {
+        syncChat();
         const it = (gameState.inventory || []).find(i => i.id === id);
         if (!it || typeof it.dur !== 'number') return false;
         const max = it.max || 100;
@@ -1118,6 +1288,7 @@ window.RPG.inventory = {
     },
     // patch arbitrary fields on an item (used by repair tools to track their own condition)
     update: (id, fields) => {
+        syncChat();
         const it = (gameState.inventory || []).find(i => i.id === id);
         if (!it || !fields) return false;
         Object.assign(it, fields);
@@ -1127,6 +1298,7 @@ window.RPG.inventory = {
     // wear down a repair material by `amount` condition points; delete it when it hits 0.
     // returns { left, consumed } — left = remaining condition (0 if gone), consumed = was it deleted
     consumeAsMaterial: (id, amount) => {
+        syncChat();
         const it = (gameState.inventory || []).find(i => i.id === id);
         if (!it) return { left: 0, consumed: true };
         const cur = (typeof it.cond === 'number') ? it.cond : 100;
@@ -1142,10 +1314,10 @@ window.RPG.inventory = {
         saveGameState(); updateInventoryGrid();
         return { left, consumed: false };
     },
-    getCoins: () => gameState.coins || 0,
-    addCoins: (n) => { gameState.coins = Math.max(0, (gameState.coins || 0) + Math.round(n || 0)); saveGameState(); updateInventoryGrid(); return gameState.coins; },
-    spendCoins: (n) => { n = Math.round(n || 0); if ((gameState.coins || 0) < n) return false; gameState.coins -= n; saveGameState(); updateInventoryGrid(); return true; },
-    refresh: () => { loadGameState(); updateInventoryGrid(); }
+    getCoins: () => (syncChat(), gameState.coins || 0),
+    addCoins: (n) => { syncChat(); gameState.coins = Math.max(0, (gameState.coins || 0) + Math.round(n || 0)); saveGameState(); updateInventoryGrid(); return gameState.coins; },
+    spendCoins: (n) => { syncChat(); n = Math.round(n || 0); if ((gameState.coins || 0) < n) return false; gameState.coins -= n; saveGameState(); updateInventoryGrid(); return true; },
+    refresh: () => { loadGameState(getContext().chatId); updateInventoryGrid(); }
 };
 
 // ------------------------------------------------------------
@@ -1156,9 +1328,12 @@ window.RPG.inventory = {
 window.RPG.quest = {
     available: true,
     isEnabled: () => !!settings.enabled,
-    listForage: () => (gameState.forageQuests || []).map(q => ({ id: q.id, vendorName: q.vendorName, skill: q.skill, chance: q.chance, ingredients: (q.ingredients || []).map(i => ({ name: i.name, where: i.where, roomKey: i.roomKey, got: !!i.got })) })),
-    neededNames: () => { const out = []; (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got) out.push(i.name); })); return out; },
+    listForage: () => (syncChat(), (gameState.forageQuests || []).map(q => ({ id: q.id, vendorName: q.vendorName, skill: q.skill, chance: q.chance, ingredients: (q.ingredients || []).map(i => ({ name: i.name, where: i.where, roomKey: i.roomKey, got: !!i.got })) }))),
+    neededNames: () => { syncChat(); return forageNeededNames(); },
+    // give back the EXACT catalogued spelling of a hunted ingredient, or null
+    canonName: (name) => { syncChat(); return forageCanonName(name); },
     addForage: (q) => {
+        syncChat();
         if (!q || !Array.isArray(q.ingredients) || !q.ingredients.length) return null;
         if (!Array.isArray(gameState.forageQuests)) gameState.forageQuests = [];
         const ings = q.ingredients
@@ -1168,10 +1343,10 @@ window.RPG.quest = {
         const quest = { id: genId(), vendorName: String(q.vendorName || '').slice(0, 40), skill: String(q.skill || '').slice(0, 40), chance: Math.max(6, Math.min(80, parseInt(q.chance) || 25)), ingredients: ings };
         // merge into an existing hunt from the same vendor instead of stacking duplicates
         const prev = gameState.forageQuests.find(x => x.vendorName === quest.vendorName && x.skill === quest.skill);
-        if (prev) { const have = new Set(prev.ingredients.map(i => i.name.toLowerCase())); ings.forEach(i => { if (!have.has(i.name.toLowerCase())) prev.ingredients.push(i); }); prev.chance = quest.chance; saveGameState(); return { id: prev.id, count: prev.ingredients.filter(i => !i.got).length }; }
+        if (prev) { const have = new Set(prev.ingredients.map(i => ingKey(i.name))); ings.forEach(i => { if (!have.has(ingKey(i.name))) prev.ingredients.push(i); }); prev.chance = quest.chance; saveGameState(); return { id: prev.id, count: prev.ingredients.filter(i => !i.got).length }; }
         gameState.forageQuests.push(quest); saveGameState();
         return { id: quest.id, count: ings.length };
     },
-    removeForage: (id) => removeForageQuest(id),
-    markFound: (name) => { const k = String(name || '').toLowerCase(); let ch = false; (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got && i.name.toLowerCase() === k) { i.got = true; ch = true; } })); if (ch) { gameState.forageQuests = gameState.forageQuests.filter(q => (q.ingredients || []).some(i => !i.got)); saveGameState(); } return ch; }
+    removeForage: (id) => { syncChat(); return removeForageQuest(id); },
+    markFound: (name) => { syncChat(); return markForageFound(name); }
 };

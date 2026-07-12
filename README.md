@@ -4,7 +4,7 @@ A SillyTavern extension that lays a light **RPG layer** over any chat: a **backp
 
 > The hub of the RPG suite. It exposes `window.RPG.inventory`, so other modules plug in: the **Map** opens locked doors with keys from here, and **Vitals** heals you when you eat food from your backpack.
 
-**Version 1.13.0**
+**Version 1.14.0**
 
 ---
 
@@ -52,6 +52,9 @@ Both are safe to call with optional chaining — they're only `available` when t
 
 ## 🩺 Troubleshooting
 
+- **The same items showed up in a different chat.** Fixed in 1.14.0 — the backpack is now *owned* by one chat. While SillyTavern swaps chats the engine holds nothing and saves nothing, so another module touching `window.RPG.inventory` mid-switch can no longer write the old chat's items into the new one (which also stopped a fresh chat from "restoring" a checkpoint that was never really its own).
+- **A crafted/hunted ingredient wasn't accepted by a recipe.** Fixed in 1.14.0 — ingredient names are matched *tolerantly* now ("серный сплав" satisfies "сплав серы"), and the loupe is told the exact wording of what you're hunting so it stops inventing near-synonyms.
+- **A found ingredient vanished from the hunt when I pressed "Leave".** Fixed in 1.14.0 — an ingredient only counts once you actually take it.
 - **Equipped gear lost its grade after unequip/re‑equip.** Fixed in 1.13.3 — the backpack now keeps equipment‑only fields (`grade`, `armour`, `attack`, and field‑patch charges) when an item is stored and listed, so re‑equipping no longer re‑rolls its quality. Needs the Equipment module too.
 - **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
 - **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.
