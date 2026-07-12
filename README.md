@@ -52,9 +52,9 @@ Both are safe to call with optional chaining — they're only `available` when t
 
 ## 🩺 Troubleshooting
 
-- **The same items showed up in a different chat.** Fixed in 1.14.0 — the backpack is now *owned* by one chat. While SillyTavern swaps chats the engine holds nothing and saves nothing, so another module touching `window.RPG.inventory` mid-switch can no longer write the old chat's items into the new one (which also stopped a fresh chat from "restoring" a checkpoint that was never really its own).
-- **A crafted/hunted ingredient wasn't accepted by a recipe.** Fixed in 1.14.0 — ingredient names are matched *tolerantly* now ("серный сплав" satisfies "сплав серы"), and the loupe is told the exact wording of what you're hunting so it stops inventing near-synonyms.
-- **A found ingredient vanished from the hunt when I pressed "Leave".** Fixed in 1.14.0 — an ingredient only counts once you actually take it.
+- **The same items appear in a different chat.** Fixed in 1.14.0. The backpack is owned by a single chat: while SillyTavern swaps chats the engine holds and saves nothing, so another module calling `window.RPG.inventory` mid-switch can no longer write the old chat's items under the new chat id. A chat containing only its greeting is also never restored from a checkpoint.
+- **An ingredient in the backpack is not accepted by a recipe.** Fixed in 1.14.0. Ingredient names are matched through a normalised, stemmed, order-independent key, so wording and inflection no longer matter (`sulfur alloy` satisfies `alloy of sulfur`). The loupe is also given the exact wording of the ingredients being hunted.
+- **A found ingredient disappeared from the hunt after declining it.** Fixed in 1.14.0. An ingredient is only counted once the item is actually taken.
 - **Equipped gear lost its grade after unequip/re‑equip.** Fixed in 1.13.3 — the backpack now keeps equipment‑only fields (`grade`, `armour`, `attack`, and field‑patch charges) when an item is stored and listed, so re‑equipping no longer re‑rolls its quality. Needs the Equipment module too.
 - **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
 - **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.

@@ -127,11 +127,10 @@ let craftSlotBase = null;
 let craftSlotMaterial = null;
 
 // ============================================================
-// CHAT OWNERSHIP — the backpack belongs to exactly ONE chat.
-// Without this, a save fired while SillyTavern is still swapping chats writes the
-// previous chat's backpack into the new chat (and into the new chat's first message
-// as a "checkpoint"), which is how items started cloning themselves between chats
-// of the same character.
+// CHAT OWNERSHIP
+// The backpack belongs to exactly one chat. A save issued while SillyTavern is still
+// swapping chats would otherwise write the previous chat's state under the new chat id
+// (and into the new chat's checkpoint), leaking items between chats.
 // ============================================================
 let currentChatId = null;   // the chat gameState in memory actually belongs to
 let pendingChatId = null;   // id handed to us by CHAT_CHANGED, before we (re)load
@@ -156,7 +155,7 @@ function sanitizeState(s) {
     if (!Array.isArray(s.inventory)) s.inventory = [];
     if (!Array.isArray(s.forageQuests)) s.forageQuests = [];
     if (typeof s.coins !== 'number') s.coins = 0;
-    const seen = new Set();               // drop exact duplicates (same id twice) left by older versions
+    const seen = new Set();               // drop duplicate ids
     s.inventory = s.inventory.filter(it => {
         if (!it || typeof it !== 'object' || !it.name) return false;
         if (!it.id) it.id = genId();
@@ -165,10 +164,9 @@ function sanitizeState(s) {
     });
     return s;
 }
-// still on the chat this state came from? (guards anything that awaited an AI call)
+// True while the loaded state still belongs to the active chat. Guards async work.
 function ownsChat(id) { return !!(stateReady && id && currentChatId === id && getContext().chatId === id); }
-// other modules (Equipment / Vitals / Map / Vendors) can call the bridge before CHAT_CHANGED
-// has switched us over — make sure we hold the right chat's backpack before touching it
+// Other modules may call the bridge before CHAT_CHANGED has switched the state over.
 function syncChat() {
     const id = pendingChatId || getContext().chatId;
     if (!id) return;
@@ -176,10 +174,10 @@ function syncChat() {
 }
 
 // ============================================================
-// TOLERANT INGREDIENT NAME MATCHING
-// The model never spells a thing the same way twice: a hunt asks for "сплав серы",
-// the loupe hands you "серный сплав", and the workbench then refuses the craft.
-// We compare a normalised, stemmed, order-independent key instead of raw strings.
+// INGREDIENT NAME MATCHING
+// Generated item names vary in wording and inflection ("sulfur alloy" / "alloy of sulfur"),
+// so a literal comparison rejects ingredients the player actually holds. Names are compared
+// through a normalised, stemmed, order-independent key instead.
 // ============================================================
 const ING_STOP = new Set([
     'of', 'the', 'a', 'an', 'and', 'with', 'from', 'for',
@@ -201,7 +199,7 @@ function ingStem(w) {
     x = ingCut(x, ING_GRAM);
     return x;
 }
-// "Серный сплав" and "сплав серы (кусок)" both collapse to "сер|сплав"
+// "Sulfur alloy" and "alloy of sulfur (piece)" collapse to the same key.
 function ingKey(name) {
     const words = String(name || '')
         .toLowerCase()
@@ -346,30 +344,29 @@ function loadGameState(explicitId) {
     const context = getContext();
     const chatId = explicitId || pendingChatId || context.chatId;
     if (!chatId) {
-        // no chat open: hold nothing, so nothing can be written into the next chat we land in
+        // No chat open: hold no state, so nothing can be written into the next chat.
         currentChatId = null; pendingChatId = null; stateReady = false;
         gameState = freshGameState();
         return;
     }
 
-    // claim the chat BEFORE anything else can save — a stale backpack can never land here now
+    // Claim the chat before anything can save, so a stale state cannot be written here.
     currentChatId = chatId; pendingChatId = null; stateReady = true;
 
     if (settings.chatStates[chatId]) {
         gameState = sanitizeState(settings.chatStates[chatId]);
         settings.chatStates[chatId] = gameState;
     } else {
-        // Restore the backpack from the chat backup (when converting to a group, or branching).
-        // A brand-new chat holds nothing but the greeting — it is not a copy of anything, so we
-        // never "restore" into it. That guard is what stops a fresh chat from inheriting the
-        // previous chat's backpack when a checkpoint got written during the switch.
+        // Restore the backpack from the in-chat backup (group conversion, branching).
+        // A chat holding only the greeting is not a copy of anything, so it is never restored
+        // into: that guard keeps a fresh chat from inheriting a previous chat's backpack.
         const chat = context.chat;
         let restored = false;
         if (chat && chat.length > 1) {
             for (let i = chat.length - 1; i >= 0; i--) {
                 const cp = chat[i].extra && chat[i].extra.rpg_inventory_checkpoint;
                 if (cp) {
-                    gameState = sanitizeState(cloneState(cp));   // a COPY: never share objects with the chat file
+                    gameState = sanitizeState(cloneState(cp));   // copy: never share objects with the chat file
                     settings.chatStates[chatId] = gameState;
                     saveSettings();
                     restored = true;
@@ -393,13 +390,13 @@ function loadGameState(explicitId) {
 }
 
 function saveGameState() {
-    if (!stateReady || !currentChatId) return;          // mid-switch: write nowhere
+    if (!stateReady || !currentChatId) return;                       // mid-switch: do not write
     const context = getContext();
-    if (context.chatId && context.chatId !== currentChatId) return;  // ST already moved on — this belongs to a chat we left
+    if (context.chatId && context.chatId !== currentChatId) return;  // state belongs to a chat we left
     settings.chatStates[currentChatId] = gameState;
     saveSettings();
 
-    // Save the backpack backup into the last message — as a private COPY, never a live reference
+    // Backup into the last message, as a copy rather than a live reference.
     const chat = context.chat;
     if (chat && chat.length > 0) {
         const lastMsg = chat[chat.length - 1];
@@ -445,7 +442,7 @@ function calculateChance() {
 async function generateStartingLoot() {
     if (!settings.enabled || gameState.inventory.length > 0) return;
     const context = getContext();
-    const myChat = currentChatId;                       // the chat this loot is being rolled for
+    const myChat = currentChatId;                       // chat this loot is rolled for
     let lore = context.characterId !== undefined && characters[context.characterId] ? characters[context.characterId].description || "" : "";
     const firstMessage = context.chat[0]?.mes || "";
 
@@ -464,7 +461,7 @@ Story Start: ${firstMessage.substring(0, 500)}
 Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type": "misc", "weight": 1}]}`;
 
         const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`);
-        if (!ownsChat(myChat)) return;                  // user switched chats while the model was thinking
+        if (!ownsChat(myChat)) return;                  // chat changed during the request
         result.items.forEach(item => {
             gameState.inventory.push(normItem(item));
         });
@@ -515,8 +512,8 @@ async function scanMessageForLoot(messageText) {
         const owned = (gameState.inventory || []).map(i => i.name).filter(Boolean);
         const ownedList = owned.length ? owned.slice(0, 80).join(', ') : '—';
         const hunted = forageNeededNames();
-        // Tell the model the EXACT wording of the ingredients we are hunting. Left to itself it
-        // invents a near-synonym ("серный сплав" for "сплав серы") and the workbench then refuses it.
+        // Give the model the exact wording of the hunted ingredients; left unconstrained it
+        // returns near-synonyms that no longer line up with the recipes.
         const huntBlock = hunted.length
             ? `\nThe player is currently hunting these ingredients: ${hunted.join(', ')}.\nIf an item you find is essentially one of them, you MUST copy that name CHARACTER FOR CHARACTER — do not rephrase, re-order or re-decline it.`
             : '';
@@ -527,11 +524,11 @@ IMPORTANT: Do NOT offer items the player ALREADY HAS or has already picked up �
 Give each item a "type" (weapon, armor, clothing, material, food, consumable, misc) and a REALISTIC "weight" in kg for the real object (a coin ~0.01, a knife ~0.3, an iron poker ~2-3, armor ~10+). Do not just use 1 for everything.
 Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "misc", "weight": 1}]}`;
         const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`);
-        if (!ownsChat(myChat)) return false;            // chat switched while the model was thinking
+        if (!ownsChat(myChat)) return false;            // chat changed during the request
         let items = Array.isArray(result.items) ? result.items : [];
-        // second net: if the model still renamed a hunted ingredient, snap it back to the exact wording
+        // If a hunted ingredient still came back reworded, snap it to its catalogued spelling.
         items.forEach(it => { if (it && it.name) { const c = forageCanonName(it.name); if (c) it.name = c; } });
-        // safety net: drop anything whose name already matches an owned item (tolerant, not just literal)
+        // Drop anything already owned (matched tolerantly, not literally).
         const ownedKeys = new Set(owned.map(ingKey));
         items = items.filter(it => it && it.name && !ownedKeys.has(ingKey(it.name)));
         if (items.length === 0) { toastr.info(t('toast_found_nothing')); return true; }
@@ -549,13 +546,13 @@ Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "mi
 // remove a finished/again-unwanted forage quest
 function removeForageQuest(id) { gameState.forageQuests = (gameState.forageQuests || []).filter(q => q.id !== id); saveGameState(); }
 
-// ---- forage helpers (all name comparisons go through the tolerant matcher) ----
+// ---- forage helpers (name comparisons go through ingKey) ----
 function forageNeededNames() {
     const out = [];
     (gameState.forageQuests || []).forEach(q => (q.ingredients || []).forEach(i => { if (!i.got) out.push(i.name); }));
     return out;
 }
-// if `name` is essentially an ingredient we are hunting, give back its EXACT catalogued spelling
+// Returns the catalogued spelling of a hunted ingredient matching `name`, or null.
 function forageCanonName(name) {
     if (!name) return null;
     const k = ingKey(name);
@@ -565,7 +562,7 @@ function forageCanonName(name) {
     }));
     return hit;
 }
-// mark a hunted ingredient as obtained — called when the player actually TAKES the item
+// Marks a hunted ingredient as obtained. Called once the item is actually taken.
 function markForageFound(name) {
     const k = ingKey(name);
     let changed = false;
@@ -605,9 +602,8 @@ function rollForageIngredient(messageText) {
     });
     if (!best) return null;
     if (Math.random() * 100 >= Math.min(92, bestChance)) return null; // this scan missed
-    // NOTE: the ingredient is NOT ticked off here — it is only counted once the player actually
-    // takes it from the loot popup (see showLootPopup). Ticking it here lost the ingredient forever
-    // if the player pressed "Leave".
+    // The ingredient is not ticked off here: it counts only once taken from the loot popup
+    // (see showLootPopup), so declining the find does not consume it.
     return { name: best.ing.name, desc: best.ing.desc || t('forage_found_desc'), type: 'material', weight: 0.2 };
 }
 
@@ -646,8 +642,7 @@ function showLootPopup(items) {
         $('#rpg-loot-list .rpg-loot-card.selected').each(function () { chosen.push(generatedItems[parseInt($(this).data('idx'))]); });
         if (chosen.length === 0) { popup.fadeOut(); return; }
         gameState.inventory.push(...chosen);
-        // tick off any foraging hunt this actually satisfies (tolerant name match)
-        chosen.forEach(it => markForageFound(it.name));
+        chosen.forEach(it => markForageFound(it.name));   // tick off any hunt this satisfies
         saveGameState(); updateInventoryGrid(); popup.fadeOut(); toastr.success(t('toast_items_added'));
     });
     $('#rpg-loot-leave').off('click').on('click', () => popup.fadeOut());
@@ -1220,9 +1215,8 @@ jQuery(() => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, (chatIdArg) => {
-        // Drop the old chat's backpack IMMEDIATELY. Other modules (Equipment, Vitals, Map, Vendors)
-        // also react to this event, and if any of them touches window.RPG.inventory before we have
-        // switched over, the previous chat's items would be saved into the new chat.
+        // Release the previous chat's state at once: other modules react to this event too, and a
+        // bridge call made before the switch completes must not save into the new chat.
         stateReady = false;
         currentChatId = null;
         pendingChatId = chatIdArg || null;
@@ -1243,7 +1237,7 @@ jQuery(() => {
 // Safe no-op for anyone who doesn't use it.
 // ============================================================
 window.RPG = window.RPG || {};
-// shared tolerant name matcher — Vendors & co. can reuse the exact same rules
+// Shared name matcher, so dependent modules apply identical rules.
 window.RPG.match = { key: (n) => ingKey(n), same: (a, b) => sameIng(a, b) };
 window.RPG.inventory = {
     available: true,
@@ -1330,7 +1324,6 @@ window.RPG.quest = {
     isEnabled: () => !!settings.enabled,
     listForage: () => (syncChat(), (gameState.forageQuests || []).map(q => ({ id: q.id, vendorName: q.vendorName, skill: q.skill, chance: q.chance, ingredients: (q.ingredients || []).map(i => ({ name: i.name, where: i.where, roomKey: i.roomKey, got: !!i.got })) }))),
     neededNames: () => { syncChat(); return forageNeededNames(); },
-    // give back the EXACT catalogued spelling of a hunted ingredient, or null
     canonName: (name) => { syncChat(); return forageCanonName(name); },
     addForage: (q) => {
         syncChat();
