@@ -1,5 +1,5 @@
 import { getContext, extension_settings } from '../../../extensions.js';
-import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, setExtensionPrompt, extension_prompt_roles, characters } from '../../../../script.js';
+import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, saveSettings as stSaveSettings, setExtensionPrompt, extension_prompt_roles, characters } from '../../../../script.js';
 
 const MODULE_NAME = 'tavern_rpg_engine';
 const PROMPT_KEY = 'rpg_status_injection';
@@ -9,7 +9,7 @@ const defaultSettings = {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKey: '',
     model: 'google/gemma-4-31b-it',
-    temperature: 0.8,
+    temperature: 0.7,
     eventMinMessages: 10,
     eventMaxMessages: 30,
     injectDepth: 1,
@@ -373,8 +373,16 @@ function pruneOldStates() {
     if (changed) saveSettings();
 }
 
-function saveSettings() { 
-    extension_settings[MODULE_NAME] = settings; 
+function saveSettings(immediate = true) {
+    extension_settings[MODULE_NAME] = settings;
+    // Discrete changes (buying, selling, taking loot, crafting…) flush to disk right away, so a quick
+    // page reload can't lose coins or items (the debounced save can be ~1s late and get dropped on
+    // refresh). High-frequency per-message writes pass immediate=false to stay debounced. Same pattern
+    // as RPG-Equipment-Durability.
+    if (immediate && typeof stSaveSettings === 'function') {
+        try { const p = stSaveSettings(); if (p && typeof p.catch === 'function') p.catch(() => { }); return; }
+        catch (e) { /* fall back to debounced below */ }
+    }
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
 }
 
@@ -429,14 +437,14 @@ function loadGameState(explicitId) {
     updateInventoryGrid();
 }
 
-function saveGameState() {
+function saveGameState(immediate = true) {
     if (!stateReady || !currentChatId) return;                       // mid-switch: do not write
     const context = getContext();
     if (context.chatId && context.chatId !== currentChatId) return;  // state belongs to a chat we left
     settings.chatStates[currentChatId] = gameState;
     if (!settings.chatStamps) settings.chatStamps = {};
     settings.chatStamps[currentChatId] = Date.now();
-    saveSettings();
+    saveSettings(immediate);
 
     // Backup into the last message, as a copy rather than a live reference.
     const chat = context.chat;
@@ -948,7 +956,7 @@ async function checkEventTrigger() {
     if (gameState.messagesUntilEvent <= 0) {
         await generateRandomEvent();
     }
-    saveGameState();
+    saveGameState(false);   // fires every message — keep it debounced, don't hammer the server
 }
 
 async function generateRandomEvent() {
