@@ -23,6 +23,16 @@ const defaultSettings = {
 
 let settings = {};
 
+// The model sometimes returns junk instead of a string (-1, 0, "null", bare numbers…).
+// String(x || fallback) let it through because -1 is truthy — that is how "-1" events
+// and "-1" items were born. A usable AI name must contain at least one letter.
+function aiName(x, fallback = null, maxLen = 60) {
+    const s = String(x == null ? '' : x).trim();
+    if (s.length < 2 || !/\p{L}/u.test(s)) return fallback;
+    if (/^(null|undefined|n\/?a|none|нет|-?\d+)$/i.test(s)) return fallback;
+    return s.slice(0, maxLen);
+}
+
 function escapeHtml(x) {
     return String(x ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -513,6 +523,9 @@ Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type":
         const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`);
         if (!ownsChat(myChat)) return;                  // chat changed during the request
         result.items.forEach(item => {
+            const nm = aiName(item && item.name);
+            if (!nm) return;                          // skip junk entries from the model
+            item.name = nm;
             gameState.inventory.push(normItem(item));
         });
         
@@ -580,7 +593,9 @@ Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "mi
         items.forEach(it => { if (it && it.name) { const c = forageCanonName(it.name); if (c) it.name = c; } });
         // Drop anything already owned (matched tolerantly, not literally).
         const ownedKeys = new Set(owned.map(ingKey));
-        items = items.filter(it => it && it.name && !ownedKeys.has(ingKey(it.name)));
+        // junk names ("-1", bare numbers) never make it into the backpack
+        items = items.filter(it => { if (!it) return false; const n = aiName(it.name); if (!n) return false; it.name = n; return true; });
+        items = items.filter(it => !ownedKeys.has(ingKey(it.name)));
         if (items.length === 0) { toastr.info(t('toast_found_nothing')); return true; }
         // BONUS layer: the loupe still finds normal loot above — here it may ALSO turn up one
         // ingredient you're currently hunting (biased by the room/scene). Never replaces normal loot.
@@ -979,17 +994,18 @@ Output strictly JSON:
         const result = await callAI(sysPrompt, `History:\n${recentHistory}`);
         if (!ownsChat(myChat)) return;
 
-        const title = String((result && result.title) || '').trim();
-        const desc = String((result && result.desc) || '').trim();
-        if (!title || !desc) { // model returned an empty/partial event — don't show a blank card, just retry soon
+        const title = aiName(result && result.title, null, 80);
+        const desc = aiName(result && result.desc, null, 600);
+        if (!title || !desc) { // empty OR junk ("-1", numbers) — don't show a broken card, retry soon
             gameState.messagesUntilEvent = 2; saveGameState();
             return;
         }
         const rw = result.reward_item;
+        const rwName = rw ? aiName(rw.name, null, 50) : null;
         gameState.activeEvent = {
             title,
             desc,
-            reward: (rw && rw.name) ? rw : null,
+            reward: rwName ? { name: rwName, desc: aiName(rw.desc, '', 140) || '' } : null,
             status: 'new'
         };
 
