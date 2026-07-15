@@ -9,7 +9,7 @@ const defaultSettings = {
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKey: '',
     model: 'google/gemma-4-31b-it',
-    temperature: 0.7,
+    temperature: 0.8,
     eventMinMessages: 10,
     eventMaxMessages: 30,
     injectDepth: 1,
@@ -17,7 +17,8 @@ const defaultSettings = {
     carryCapacity: 50,
     gmMode: false,
     announceUse: true,
-    chatStates: {} 
+    chatStates: {},
+    chatStamps: {}   // chatId -> last-used timestamp, lets stale states be pruned
 };
 
 let settings = {};
@@ -136,9 +137,19 @@ let currentChatId = null;   // the chat gameState in memory actually belongs to
 let pendingChatId = null;   // id handed to us by CHAT_CHANGED, before we (re)load
 let stateReady = false;     // false while switching chats — nothing may be saved
 
-function freshGameState() {
+// Single safe source for the event interval. Survives NaN/garbage in settings
+// (an empty number input saves NaN, which used to kill the event system forever).
+function evtRange() {
     const lo = Math.max(1, parseInt(settings.eventMinMessages) || 10);
     const hi = Math.max(lo + 1, parseInt(settings.eventMaxMessages) || 30);
+    return { lo, hi };
+}
+function rollEventCounter() {
+    const { lo, hi } = evtRange();
+    return Math.floor(Math.random() * (hi - lo)) + lo;
+}
+function freshGameState() {
+    const { lo, hi } = evtRange();
     return {
         inventory: [],
         coins: 0,
@@ -333,6 +344,33 @@ function loadSettings() {
     if (!extension_settings[MODULE_NAME]) extension_settings[MODULE_NAME] = {};
     settings = Object.assign({}, defaultSettings, extension_settings[MODULE_NAME]);
     if (!settings.chatStates) settings.chatStates = {};
+    if (!settings.chatStamps) settings.chatStamps = {};
+    // heal NaN/garbage that older builds could have saved from empty inputs
+    if (!Number.isFinite(settings.eventMinMessages)) settings.eventMinMessages = defaultSettings.eventMinMessages;
+    if (!Number.isFinite(settings.eventMaxMessages)) settings.eventMaxMessages = defaultSettings.eventMaxMessages;
+    if (!Number.isFinite(settings.injectDepth)) settings.injectDepth = defaultSettings.injectDepth;
+    if (!Number.isFinite(settings.carryCapacity)) settings.carryCapacity = defaultSettings.carryCapacity;
+}
+
+// Old per-chat states used to live in settings forever, bloating settings.json.
+// States untouched for STATE_TTL days are dropped; they are still recoverable
+// from the rpg_inventory_checkpoint backup written into the chat itself.
+const STATE_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 days
+function pruneOldStates() {
+    const now = Date.now();
+    let changed = false;
+    for (const id of Object.keys(settings.chatStates)) {
+        if (!settings.chatStamps[id]) { settings.chatStamps[id] = now; changed = true; continue; } // migrate
+        if (now - settings.chatStamps[id] > STATE_TTL_MS) {
+            delete settings.chatStates[id];
+            delete settings.chatStamps[id];
+            changed = true;
+        }
+    }
+    for (const id of Object.keys(settings.chatStamps)) {
+        if (!settings.chatStates[id]) { delete settings.chatStamps[id]; changed = true; }
+    }
+    if (changed) saveSettings();
 }
 
 function saveSettings() { 
@@ -352,6 +390,8 @@ function loadGameState(explicitId) {
 
     // Claim the chat before anything can save, so a stale state cannot be written here.
     currentChatId = chatId; pendingChatId = null; stateReady = true;
+    if (!settings.chatStamps) settings.chatStamps = {};
+    settings.chatStamps[chatId] = Date.now();   // touch: keeps this chat's state from being pruned
 
     if (settings.chatStates[chatId]) {
         gameState = sanitizeState(settings.chatStates[chatId]);
@@ -394,6 +434,8 @@ function saveGameState() {
     const context = getContext();
     if (context.chatId && context.chatId !== currentChatId) return;  // state belongs to a chat we left
     settings.chatStates[currentChatId] = gameState;
+    if (!settings.chatStamps) settings.chatStamps = {};
+    settings.chatStamps[currentChatId] = Date.now();
     saveSettings();
 
     // Backup into the last message, as a copy rather than a live reference.
@@ -716,7 +758,10 @@ function renderMainUI() {
 
     $('#rpg-inventory-btn').off('click').on('click', () => { updateInventoryGrid(); $('#rpg-inventory-modal').toggleClass('visible'); });
     $('#rpg-quest-toggle-btn').off('click').on('click', () => { renderQuestPanelContent(); $('#rpg-quest-modal').toggleClass('visible'); $('#rpg-quest-badge').removeClass('active'); });
-    $('.rpg-modal-close').off('click').on('click', function() { $(this).closest('.rpg-modal').removeClass('visible'); });
+    // Delegated + namespaced, and scoped to OUR modals only: a blanket
+    // $('.rpg-modal-close').off('click') here used to strip the Map extension's
+    // close handlers too (and vice versa) — they only worked by luck.
+    $(document).off('click.rpgEngineClose').on('click.rpgEngineClose', '#rpg-inventory-modal .rpg-modal-close, #rpg-quest-modal .rpg-modal-close', function() { $(this).closest('.rpg-modal').removeClass('visible'); });
     $('#rpg-craft-action').off('click').on('click', processCraft);
     $('#rpg-slot-base').off('click').on('click', () => { craftSlotBase = null; updateCraftZone(); });
     $('#rpg-slot-mat').off('click').on('click', () => { craftSlotMaterial = null; updateCraftZone(); });
@@ -850,6 +895,7 @@ function useItemInChat(item) {
 // === REMOVING ITEMS FROM INVENTORY ===
 eventSource.on(event_types.MESSAGE_SENT, (messageId) => {
     if (!settings.enabled) return;
+    syncChat();   // item rolls must resolve against the chat the message was sent in
     const msg = getContext().chat[messageId];
     if (!msg || !msg.is_user) return;
 
@@ -889,11 +935,13 @@ eventSource.on(event_types.MESSAGE_SENT, (messageId) => {
 
 // === EVENT SYSTEM (PLAYER-FOCUSED) ===
 async function checkEventTrigger() {
-    if (!settings.enabled || gameState.activeEvent) return;
+    if (!settings.enabled) return;
+    syncChat();                       // make sure we count against the chat that is actually open
+    if (gameState.activeEvent) return;
 
     // self-heal: empty/broken counter or above the new max -> recompute by the current interval
-    if (!Number.isFinite(gameState.messagesUntilEvent) || gameState.messagesUntilEvent > settings.eventMaxMessages) {
-        gameState.messagesUntilEvent = Math.floor(Math.random() * (settings.eventMaxMessages - settings.eventMinMessages)) + settings.eventMinMessages;
+    if (!Number.isFinite(gameState.messagesUntilEvent) || gameState.messagesUntilEvent > evtRange().hi) {
+        gameState.messagesUntilEvent = rollEventCounter();
     }
 
     gameState.messagesUntilEvent--;
@@ -937,7 +985,7 @@ Output strictly JSON:
             status: 'new'
         };
 
-        gameState.messagesUntilEvent = Math.floor(Math.random() * (settings.eventMaxMessages - settings.eventMinMessages)) + settings.eventMinMessages;
+        gameState.messagesUntilEvent = rollEventCounter();
         saveGameState(); renderQuestPanelContent();
         $('#rpg-quest-badge').addClass('active'); toastr.info(t('toast_new_event'));
     } catch(e) {
@@ -1186,9 +1234,9 @@ function setupUI() {
     $('#rpg-eng-base').val(settings.baseUrl).on('change', function() { settings.baseUrl = $(this).val(); saveSettings(); });
     $('#rpg-eng-key').val(settings.apiKey).on('change', function() { settings.apiKey = $(this).val(); saveSettings(); });
     $('#rpg-eng-model').val(settings.model).on('change', function() { settings.model = $(this).val(); saveSettings(); });
-    $('#rpg-eng-min').val(settings.eventMinMessages).on('change', function() { settings.eventMinMessages = parseInt($(this).val()); saveSettings(); });
-    $('#rpg-eng-max').val(settings.eventMaxMessages).on('change', function() { settings.eventMaxMessages = parseInt($(this).val()); saveSettings(); });
-    $('#rpg-eng-depth').val(settings.injectDepth).on('change', function() { settings.injectDepth = parseInt($(this).val()); saveSettings(); });
+    $('#rpg-eng-min').val(settings.eventMinMessages).on('change', function() { settings.eventMinMessages = Math.max(1, parseInt($(this).val()) || 10); $(this).val(settings.eventMinMessages); saveSettings(); });
+    $('#rpg-eng-max').val(settings.eventMaxMessages).on('change', function() { settings.eventMaxMessages = Math.max(2, parseInt($(this).val()) || 30); $(this).val(settings.eventMaxMessages); saveSettings(); });
+    $('#rpg-eng-depth').val(settings.injectDepth).on('change', function() { settings.injectDepth = Math.max(0, parseInt($(this).val()) || 0); $(this).val(settings.injectDepth); saveSettings(); });
     $('#rpg-eng-cap').val(settings.carryCapacity).on('change', function() { settings.carryCapacity = Math.max(1, parseInt($(this).val()) || 50); saveSettings(); updateContextInjection(); });
     $('#rpg-eng-gm').prop('checked', settings.gmMode).on('change', function() { settings.gmMode = this.checked; saveSettings(); updateInventoryGrid(); });
     $('#rpg-eng-announce').prop('checked', settings.announceUse !== false).on('change', function() { settings.announceUse = this.checked; saveSettings(); });
@@ -1206,6 +1254,7 @@ function setupUI() {
 
 jQuery(() => {
     loadSettings();
+    pruneOldStates();
     setupUI();
     
     // Load state on startup
