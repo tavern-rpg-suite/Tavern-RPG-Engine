@@ -41,15 +41,3 @@ Drag one item onto another on the workbench to combine them — the model decide
 ## ✉️ Events & quests
 
 Every few messages a letter may arrive in the journal — a small, player-aimed hook with a reward. Accept it, roleplay it, and resolve it as success or failure; rewards land in your backpack.
-
-## 🔌 Cross-extension bridge
-
-`window.RPG.inventory`: `isEnabled()`, `list()`, `get(id)`, `add(item)`, `update(id, fields)`, `remove(id)`, `getCoins()/addCoins(n)/spendCoins(n)`.
-
-`window.RPG.quest` (foraging): `listForage()`, `neededNames()`, `addForage(quest)`, `removeForage(id)`, `markFound(name)`. Vendors starts an ingredient hunt here; the magnifier reads it to occasionally surface a needed ingredient while you search.
-
-Both are safe to call with optional chaining — they're only `available` when the module is enabled.
-- **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
-- **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.
-- **Loot, crafting or events do nothing.** They each need a working URL / key / model.
-- **The magnifier only finds ingredients now.** It doesn't — normal loot always rolls first; a hunted ingredient is only an added chance on top.
