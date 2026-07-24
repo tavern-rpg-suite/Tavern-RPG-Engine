@@ -4,7 +4,7 @@ A SillyTavern extension that lays a light **RPG layer** over any chat: a **backp
 
 > The hub of the RPG suite. It exposes `window.RPG.inventory`, so other modules plug in: the **Map** opens locked doors with keys from here, and **Vitals** heals you when you eat food from your backpack.
 
-**Version 1.14.0**
+**Version 1.14.1**
 
 ---
 
