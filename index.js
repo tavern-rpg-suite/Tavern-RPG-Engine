@@ -465,7 +465,7 @@ function saveGameState(immediate = true) {
         saveChatDebounced();
     }
 }
-async function callAI(systemPrompt, userPrompt) {
+async function callAI(systemPrompt, userPrompt, maxTokens = 1200) {
     if (!settings.apiKey) throw new Error("API key is not set!");
     let endpointUrl = (settings.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '') + '/chat/completions';
     
@@ -478,6 +478,10 @@ async function callAI(systemPrompt, userPrompt) {
                     model: settings.model,
                     messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
                     temperature: settings.temperature,
+                    // Without an explicit cap many providers (OpenRouter, free models) apply a tiny
+                    // default and CUT the reply mid-sentence — that was the "events arrive truncated"
+                    // bug, and a chopped JSON then failed to parse or came back empty.
+                    max_tokens: maxTokens,
                     response_format: { type: "json_object" }
                 })
             });
@@ -485,11 +489,60 @@ async function callAI(systemPrompt, userPrompt) {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             
             const data = await response.json();
-            let content = data.choices[0].message.content.trim();
-            const jsonMatch = content.match(/\{[\s\S]*\}/);
-            return JSON.parse(jsonMatch ? jsonMatch[0] : content);
+            const finish = data.choices?.[0]?.finish_reason;
+            let content = (data.choices?.[0]?.message?.content || '').trim();
+            const parsed = parseLenientJSON(content);
+            if (parsed === null) throw new Error(finish === 'length' ? 'reply truncated (raise max_tokens)' : 'bad JSON');
+            return parsed;
         } catch(e) { if(i===1) throw e; }
     }
+}
+
+// Tolerates a reply that got cut off: closes dangling strings/braces so a truncated
+// but mostly-complete event still yields usable data instead of throwing.
+function parseLenientJSON(content) {
+    if (!content) return null;
+    const start = content.indexOf('{');
+    if (start < 0) return null;
+    let frag = content.slice(start);
+    try { return JSON.parse(frag); } catch (e) { /* try to repair a truncated tail */ }
+    // strip a trailing partial token, balance quotes and brackets
+    let inStr = false, esc = false, depth = 0, lastSafe = -1;
+    const stack = [];
+    for (let k = 0; k < frag.length; k++) {
+        const ch = frag[k];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\') { esc = true; continue; }
+        if (ch === '"') { inStr = !inStr; if (!inStr) lastSafe = k; continue; }
+        if (inStr) continue;
+        if (ch === '{' || ch === '[') { stack.push(ch === '{' ? '}' : ']'); depth++; }
+        else if (ch === '}' || ch === ']') { stack.pop(); depth--; if (depth === 0) lastSafe = k; }
+        else if (ch === ',' || /\s/.test(ch)) { if (depth > 0) lastSafe = k; }
+    }
+    let repaired = frag;
+    if (inStr) repaired += '"';                       // close a dangling string
+    repaired = repaired.replace(/,\s*$/, '');          // drop a trailing comma
+    while (stack.length) repaired += stack.pop();     // close open braces/brackets
+    try { return JSON.parse(repaired); } catch (e) { }
+    // last resort: parse up to the last balanced point
+    if (lastSafe > 0) {
+        let head = frag.slice(0, lastSafe + 1);
+        const st2 = [];
+        let is2 = false, es2 = false;
+        for (const ch of head) {
+            if (es2) { es2 = false; continue; }
+            if (ch === '\\') { es2 = true; continue; }
+            if (ch === '"') { is2 = !is2; continue; }
+            if (is2) continue;
+            if (ch === '{' || ch === '[') st2.push(ch === '{' ? '}' : ']');
+            else if (ch === '}' || ch === ']') st2.pop();
+        }
+        if (is2) head += '"';
+        head = head.replace(/,\s*$/, '');
+        while (st2.length) head += st2.pop();
+        try { return JSON.parse(head); } catch (e) { }
+    }
+    return null;
 }
 
 function calculateChance() {
@@ -520,9 +573,9 @@ Story Start: ${firstMessage.substring(0, 500)}
 
 Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type": "misc", "weight": 1}]}`;
 
-        const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`);
+        const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`, 1500);
         if (!ownsChat(myChat)) return;                  // chat changed during the request
-        result.items.forEach(item => {
+        (Array.isArray(result.items) ? result.items : []).forEach(item => {
             const nm = aiName(item && item.name);
             if (!nm) return;                          // skip junk entries from the model
             item.name = nm;
@@ -586,7 +639,7 @@ Do NOT make up impossible items. All names and descriptions MUST be in ${genLang
 IMPORTANT: Do NOT offer items the player ALREADY HAS or has already picked up — avoid duplicates of the owned items listed below (skip anything with the same or an obviously equivalent name).${huntBlock}
 Give each item a "type" (weapon, armor, clothing, material, food, consumable, misc) and a REALISTIC "weight" in kg for the real object (a coin ~0.01, a knife ~0.3, an iron poker ~2-3, armor ~10+). Do not just use 1 for everything.
 Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "misc", "weight": 1}]}`;
-        const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`);
+        const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`, 1200);
         if (!ownsChat(myChat)) return false;            // chat changed during the request
         let items = Array.isArray(result.items) ? result.items : [];
         // If a hunted ingredient still came back reworded, snap it to its catalogued spelling.
@@ -878,7 +931,7 @@ If it IS logical, invent a new name and description for the Base Item to reflect
 Output strictly JSON: 
 { "logical": true/false, "reason": "Short explanation", "newName": "New improved name", "newDesc": "New description" }`;
 
-        const result = await callAI(sysPrompt, "Is this craft logical? Provide new name and desc.");
+        const result = await callAI(sysPrompt, "Is this craft logical? Provide new name and desc.", 900);
         if (!ownsChat(myChat)) { craftSlotBase = null; craftSlotMaterial = null; updateCraftZone(); $('#rpg-craft-action').text(t('upgrade_item')); return; }
 
         if (!result.logical) {
@@ -991,7 +1044,7 @@ Output strictly JSON:
   "reward_item": {"name": "Reward name", "desc": "Reward description"}
 }`;
         
-        const result = await callAI(sysPrompt, `History:\n${recentHistory}`);
+        const result = await callAI(sysPrompt, `History:\n${recentHistory}`, 1600);
         if (!ownsChat(myChat)) return;
 
         const title = aiName(result && result.title, null, 80);
