@@ -49,13 +49,6 @@ Every few messages a letter may arrive in the journal — a small, player-aimed 
 `window.RPG.quest` (foraging): `listForage()`, `neededNames()`, `addForage(quest)`, `removeForage(id)`, `markFound(name)`. Vendors starts an ingredient hunt here; the magnifier reads it to occasionally surface a needed ingredient while you search.
 
 Both are safe to call with optional chaining — they're only `available` when the module is enabled.
-
-## 🩺 Troubleshooting
-
-- **The same items appear in a different chat.** Fixed in 1.14.0. The backpack is owned by a single chat: while SillyTavern swaps chats the engine holds and saves nothing, so another module calling `window.RPG.inventory` mid-switch can no longer write the old chat's items under the new chat id. A chat containing only its greeting is also never restored from a checkpoint.
-- **An ingredient in the backpack is not accepted by a recipe.** Fixed in 1.14.0. Ingredient names are matched through a normalised, stemmed, order-independent key, so wording and inflection no longer matter (`sulfur alloy` satisfies `alloy of sulfur`). The loupe is also given the exact wording of the ingredients being hunted.
-- **A found ingredient disappeared from the hunt after declining it.** Fixed in 1.14.0. An ingredient is only counted once the item is actually taken.
-- **Equipped gear lost its grade after unequip/re‑equip.** Fixed in 1.13.3 — the backpack now keeps equipment‑only fields (`grade`, `armour`, `attack`, and field‑patch charges) when an item is stored and listed, so re‑equipping no longer re‑rolls its quality. Needs the Equipment module too.
 - **The search kept finding the same item.** Fixed in 1.12.0 — the scanner now knows your backpack and skips items you already own.
 - **The magnifier went dead without finding anything.** Fixed in 1.12.0 — a failed/empty search no longer consumes the one search per message.
 - **Loot, crafting or events do nothing.** They each need a working URL / key / model.
