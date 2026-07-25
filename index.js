@@ -552,10 +552,18 @@ function calculateChance() {
     return Math.floor(Math.random() * 40) + 10; 
 }
 
+// Chat with a starting-loot request currently in flight. loadGameState can run twice in
+// quick succession for a brand-new chat (syncChat from the bridge + the CHAT_CHANGED timeout),
+// and lootGenerated only turns true AFTER the AI reply — without this guard both calls
+// generated loot and every starting item appeared twice.
+let lootGenChatId = null;
+
 async function generateStartingLoot() {
-    if (!settings.enabled || gameState.inventory.length > 0) return;
+    if (!settings.enabled || gameState.lootGenerated || gameState.inventory.length > 0) return;
     const context = getContext();
     const myChat = currentChatId;                       // chat this loot is rolled for
+    if (!myChat || lootGenChatId === myChat) return;    // a request for this chat is already running
+    lootGenChatId = myChat;
     let lore = context.characterId !== undefined && characters[context.characterId] ? characters[context.characterId].description || "" : "";
     const firstMessage = context.chat[0]?.mes || "";
 
@@ -575,6 +583,7 @@ Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type":
 
         const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`, 1500);
         if (!ownsChat(myChat)) return;                  // chat changed during the request
+        if (gameState.lootGenerated) return;            // someone else already filled the backpack meanwhile
         (Array.isArray(result.items) ? result.items : []).forEach(item => {
             const nm = aiName(item && item.name);
             if (!nm) return;                          // skip junk entries from the model
@@ -587,6 +596,7 @@ Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type":
         toastr.success(t('toast_starting'));
         updateInventoryGrid();
     } catch (e) {}
+    finally { if (lootGenChatId === myChat) lootGenChatId = null; }
 }
 
 // MAGNIFIER
