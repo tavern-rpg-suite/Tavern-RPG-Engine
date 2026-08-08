@@ -10,6 +10,7 @@ const defaultSettings = {
     apiKey: '',
     model: 'google/gemma-4-31b-it',
     temperature: 0.7,
+    strictJson: true,        // send response_format to cloud providers; never to local backends
     eventMinMessages: 10,
     eventMaxMessages: 30,
     injectDepth: 1,
@@ -465,9 +466,46 @@ function saveGameState(immediate = true) {
         saveChatDebounced();
     }
 }
+/* ------------------------------------------------------------
+   ENDPOINT HANDLING
+   Two things only, both about reaching the server — nothing about what is sent
+   or how a reply is read.
+
+   normalizeBase: OpenAI-style backends live under /v1. Leave that off —
+   "http://localhost:1234" — and the request goes to /chat/completions, which
+   LM Studio and KoboldCpp answer with "Unexpected endpoint or method". The
+   segment is added only when the address carries no version at all, so
+   ".../api/v1" is left exactly as typed.
+
+   wantsStrictJson: response_format is an OpenAI parameter, not a standard one.
+   KoboldCpp turns it into a grammar constraint that forbids anything but an
+   object — a model that opens with "[" then cannot finish and bails out with
+   EOS after a few tokens. Local backends do not get it. Nothing is lost:
+   parseLenientJSON already pulls the object out of whatever comes back.
+   ------------------------------------------------------------ */
+function normalizeBase(url) {
+    let u = String(url || '').trim().replace(/\s+/g, '');
+    if (!u) return u;
+    u = u.replace(/\/+$/, '');
+    u = u.replace(/\/(chat\/completions|completions|images|images\/generations|embeddings)$/i, '');
+    if (!/\/v\d+($|\/)/i.test(u)) u += '/v1';
+    return u;
+}
+function isLocalEndpoint(url) {
+    const u = String(url || '').toLowerCase();
+    if (!u) return false;
+    return /(^|\/\/)(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal)([:/]|$)/.test(u)
+        || /:(5001|5000|8080|8000|1234|11434|5002)(\/|$)/.test(u)
+        || /192\.168\.|10\.\d+\.|172\.(1[6-9]|2\d|3[01])\./.test(u);
+}
+function wantsStrictJson(url) {
+    if (settings.strictJson === false) return false;
+    return !isLocalEndpoint(url);
+}
+
 async function callAI(systemPrompt, userPrompt, maxTokens = 1200) {
     if (!settings.apiKey) throw new Error("API key is not set!");
-    let endpointUrl = (settings.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '') + '/chat/completions';
+    let endpointUrl = (normalizeBase(settings.baseUrl) || 'https://openrouter.ai/api/v1') + '/chat/completions';
     
     for (let i=0; i<2; i++) {
         try {
@@ -482,7 +520,7 @@ async function callAI(systemPrompt, userPrompt, maxTokens = 1200) {
                     // default and CUT the reply mid-sentence — that was the "events arrive truncated"
                     // bug, and a chopped JSON then failed to parse or came back empty.
                     max_tokens: maxTokens,
-                    response_format: { type: "json_object" }
+                    ...(wantsStrictJson(endpointUrl) ? { response_format: { type: "json_object" } } : {})
                 })
             });
             if (response.status === 429 && i===0) { await new Promise(r=>setTimeout(r,2000)); continue; }
