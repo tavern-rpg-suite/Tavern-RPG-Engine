@@ -503,7 +503,11 @@ function wantsStrictJson(url) {
     return !isLocalEndpoint(url);
 }
 
-async function callAI(systemPrompt, userPrompt, maxTokens = 1200) {
+/* Raised across the board. Reasoning models spend part of the budget thinking before
+   they write anything, so a limit that used to be comfortable now cuts the answer in
+   half — the event text arrives without its ending. Unused budget costs nothing: only
+   what is actually generated is billed, so a ceiling that is never reached is free. */
+async function callAI(systemPrompt, userPrompt, maxTokens = 3000) {
     if (!settings.apiKey) throw new Error("API key is not set!");
     let endpointUrl = (normalizeBase(settings.baseUrl) || 'https://openrouter.ai/api/v1') + '/chat/completions';
     
@@ -530,7 +534,12 @@ async function callAI(systemPrompt, userPrompt, maxTokens = 1200) {
             const finish = data.choices?.[0]?.finish_reason;
             let content = (data.choices?.[0]?.message?.content || '').trim();
             const parsed = parseLenientJSON(content);
-            if (parsed === null) throw new Error(finish === 'length' ? 'reply truncated (raise max_tokens)' : 'bad JSON');
+            if (parsed === null) {
+                // The lenient parser already tries to salvage a cut-off reply; reaching
+                // here means even that failed, so say which of the two it was.
+                console.warn('[RPG Engine] unusable reply (' + (finish || 'no finish_reason') + '):', content.slice(0, 500));
+                throw new Error(finish === 'length' ? 'reply truncated' : 'bad JSON');
+            }
             return parsed;
         } catch(e) { if(i===1) throw e; }
     }
@@ -619,7 +628,7 @@ Story Start: ${firstMessage.substring(0, 500)}
 
 Output strictly JSON: {"items": [{"name": "Name", "desc": "Description", "type": "misc", "weight": 1}]}`;
 
-        const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`, 1500);
+        const result = await callAI(sysPrompt, `Give me 3 starting items in ${genLang()}.`, 3000);
         if (!ownsChat(myChat)) return;                  // chat changed during the request
         if (gameState.lootGenerated) return;            // someone else already filled the backpack meanwhile
         (Array.isArray(result.items) ? result.items : []).forEach(item => {
@@ -687,7 +696,7 @@ Do NOT make up impossible items. All names and descriptions MUST be in ${genLang
 IMPORTANT: Do NOT offer items the player ALREADY HAS or has already picked up — avoid duplicates of the owned items listed below (skip anything with the same or an obviously equivalent name).${huntBlock}
 Give each item a "type" (weapon, armor, clothing, material, food, consumable, misc) and a REALISTIC "weight" in kg for the real object (a coin ~0.01, a knife ~0.3, an iron poker ~2-3, armor ~10+). Do not just use 1 for everything.
 Output JSON: {"items": [{"name": "Item name", "desc": "Description", "type": "misc", "weight": 1}]}`;
-        const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`, 1200);
+        const result = await callAI(sysPrompt, `Items the player ALREADY OWNS (do not offer these again): ${ownedList}\n\nMessage:\n${messageText}`, 3000);
         if (!ownsChat(myChat)) return false;            // chat changed during the request
         let items = Array.isArray(result.items) ? result.items : [];
         // If a hunted ingredient still came back reworded, snap it to its catalogued spelling.
@@ -815,6 +824,39 @@ function showLootPopup(items) {
 }
 
 // UI & CRAFTING
+/* The panels rebuild themselves for every action, and all three of their lists
+   scroll. Nothing remembered where they were, so picking one item out of a long
+   backpack threw you back to the top of it. */
+const ENG_SCROLL = ['.rpg-items-grid', '.rpg-quest-desc', '.dsp-body'];
+
+function grabEngScroll() {
+    const out = [];
+    try {
+        ['#rpg-inventory-modal', '#rpg-quest-modal'].forEach(rootSel => {
+            const root = document.querySelector(rootSel);
+            if (!root) return;
+            ENG_SCROLL.forEach(sel => {
+                root.querySelectorAll(sel).forEach((el, i) => {
+                    if (el.scrollTop > 0) out.push({ rootSel, sel, i, top: el.scrollTop });
+                });
+            });
+        });
+    } catch (e) { /* never let this break a redraw */ }
+    return out;
+}
+
+function restoreEngScroll(saved) {
+    if (!saved || !saved.length) return;
+    try {
+        saved.forEach(sv => {
+            const root = document.querySelector(sv.rootSel);
+            if (!root) return;
+            const el = root.querySelectorAll(sv.sel)[sv.i];
+            if (el) el.scrollTop = sv.top;      // a shorter list is clamped by the browser
+        });
+    } catch (e) { /* same */ }
+}
+
 function renderMainUI() {
     let container = $('#rpg-buttons-container');
     if (container.length === 0) {
@@ -892,19 +934,55 @@ function renderMainUI() {
 }
 
 function makeModalDraggable(elmnt, handle) {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    if (!handle) return;
     handle.onmousedown = (e) => {
         if (e.target.closest('.rpg-modal-close, .dsp-close, button, input, select, a, .rpg-item-eat, .rpg-item-tocoins, .rpg-item-delete')) return;
-        e.preventDefault(); pos3 = e.clientX; pos4 = e.clientY;
-        document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
-        document.onmousemove = (ev) => {
-            ev.preventDefault(); pos1 = pos3 - ev.clientX; pos2 = pos4 - ev.clientY; pos3 = ev.clientX; pos4 = ev.clientY;
-            elmnt.style.top = (elmnt.offsetTop - pos2) + "px"; elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+        e.preventDefault();
+
+        /* Remember how far the pointer is from the window's corner and keep that
+           distance for the whole drag. transform is deliberately not touched: the
+           opening animation and the fit-to-width scaling both use it, and writing
+           there as well makes them fight and the window drift away from the cursor.
+
+           offsetTop and offsetLeft used to be read on every mouse move, and each read
+           makes the browser lay out the whole page before it can answer — with a long
+           chat behind the window that is most of a frame. Layout is measured once, and
+           the writes are batched into a single animation frame. */
+        const rect = elmnt.getBoundingClientRect();
+        const shiftX = e.clientX - rect.left;
+        const shiftY = e.clientY - rect.top;
+
+        let x = rect.left, y = rect.top, queued = false;
+
+        const paint = () => {
+            queued = false;
+            elmnt.style.left = x + 'px';
+            elmnt.style.top = y + 'px';
         };
+
+        elmnt.style.left = rect.left + 'px';
+        elmnt.style.top = rect.top + 'px';
+
+        const onMove = (ev) => {
+            ev.preventDefault();
+            x = ev.clientX - shiftX;
+            y = ev.clientY - shiftY;
+            if (!queued) { queued = true; requestAnimationFrame(paint); }
+        };
+
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            paint();
+        };
+
+        document.addEventListener('mousemove', onMove, { passive: false });
+        document.addEventListener('mouseup', onUp);
     };
 }
 
 function updateInventoryGrid() {
+    const keepScroll = grabEngScroll();
     const grid = $('#rpg-inv-grid');
     grid.empty();
     const totalW = gameState.inventory.reduce((sum, i) => sum + ((typeof i.weight === 'number') ? i.weight : 1), 0);
@@ -952,6 +1030,7 @@ function updateInventoryGrid() {
         });
         grid.append(card);
     });
+    restoreEngScroll(keepScroll);
 }
 
 function updateCraftZone() {
@@ -979,7 +1058,7 @@ If it IS logical, invent a new name and description for the Base Item to reflect
 Output strictly JSON: 
 { "logical": true/false, "reason": "Short explanation", "newName": "New improved name", "newDesc": "New description" }`;
 
-        const result = await callAI(sysPrompt, "Is this craft logical? Provide new name and desc.", 900);
+        const result = await callAI(sysPrompt, "Is this craft logical? Provide new name and desc.", 2000);
         if (!ownsChat(myChat)) { craftSlotBase = null; craftSlotMaterial = null; updateCraftZone(); $('#rpg-craft-action').text(t('upgrade_item')); return; }
 
         if (!result.logical) {
@@ -1092,7 +1171,7 @@ Output strictly JSON:
   "reward_item": {"name": "Reward name", "desc": "Reward description"}
 }`;
         
-        const result = await callAI(sysPrompt, `History:\n${recentHistory}`, 1600);
+        const result = await callAI(sysPrompt, `History:\n${recentHistory}`, 4000);
         if (!ownsChat(myChat)) return;
 
         const title = aiName(result && result.title, null, 80);
@@ -1163,6 +1242,7 @@ function dispatchClosedSealSvg() {
 function renderQuestPanelContent() {
     const content = $('#rpg-quest-content');
     if (content.length === 0) return;
+    const keepScroll = grabEngScroll();
 
     const FOLDER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7h6l2 2h10v10H3z"/></svg>';
     const CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
@@ -1256,20 +1336,26 @@ function renderQuestPanelContent() {
     fitLetter();
     const dragEl = document.getElementById('rpg-q-drag') || content.find('.dsp-empty-card')[0];
     if (dragEl) makeModalDraggable(document.getElementById('rpg-quest-modal'), dragEl);
+    restoreEngScroll(keepScroll);
 }
 
 function fitLetter() {
     const fit = document.querySelector('#rpg-quest-content .dsp-fit');
     const card = document.querySelector('#rpg-quest-content .dsp');
     if (!fit || !card) return;
-    fit.style.transform = 'none';
-    const naturalH = card.offsetHeight + 30;
+    // Resetting the transform made the browser lay the letter out unscaled, and that
+    // intermediate state gets painted — the card jumps to full size and back on every
+    // redraw. Measured before anything is written instead: getBoundingClientRect
+    // reports the SCALED height, so the previous scale is divided back out.
+    const prev = fit.dataset.scale ? parseFloat(fit.dataset.scale) : 1;
+    const naturalH = card.getBoundingClientRect().height / (prev || 1) + 30;
     const availW = Math.min(420, window.innerWidth * 0.96) - 4;
     const availH = window.innerHeight - 64;
     const s = Math.min(1, availW / 410, availH / naturalH);
     fit.style.transformOrigin = 'top center';
     fit.style.transform = 'scale(' + s + ')';
     fit.style.height = (naturalH * s) + 'px';
+    fit.dataset.scale = String(s);
 }
 
 
