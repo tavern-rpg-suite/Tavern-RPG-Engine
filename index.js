@@ -1114,9 +1114,18 @@ eventSource.on(event_types.MESSAGE_SENT, (messageId) => {
         if (itemIndex !== -1) {
             const item = gameState.inventory[itemIndex];
             const isSuccess = (Math.random() * 100) <= item.chance;
-            const resultText = isSuccess ? 
-                `\n[The player successfully used the item "${item.name}". Describe the positive consequences for the player.]` : 
-                `\n[The player tried to use "${item.name}" but FAILED. Describe the negative consequences or a counter-attack.]`;
+            /* These two go into the CHAT MESSAGE, so the main model reads them as part of
+               the scene. "The player" reads as a third party standing next to the
+               character, and the model starts mixing the two up. {{user}} is the macro
+               SillyTavern replaces with the actual persona name, so the sentence names
+               the same person the rest of the message is about.
+
+               The other "The player" lines in this file are prompts for the SECOND
+               model — an analyst that is being told about the player — and are left
+               alone on purpose. */
+            const resultText = isSuccess ?
+                `\n[{{user}} successfully used the item "${item.name}". Describe the positive consequences for {{user}}.]` :
+                `\n[{{user}} tried to use "${item.name}" but FAILED. Describe the negative consequences or a counter-attack.]`;
             modifiedText = modifiedText.replace(match[0], resultText);
             usedItems.push(item.id); 
         } else {
