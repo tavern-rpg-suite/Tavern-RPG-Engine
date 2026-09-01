@@ -49,7 +49,11 @@ const I18N = {
         coins_label: 'Coins', weight_label: 'Weight', eat: 'Eat', coins_add: 'Add coins', coins_sub: 'Remove coins', use_item: 'Use', used: '{name} used.', used_heal: '+{n} HP.', used_fed: 'Satiety +{n}.', used_buff: 'Effect: {name}.', to_coins: 'Turn into coins', tc_checking: 'Counting it out...', tc_yes: 'Converted {name} → +{n} coins. {reason}', tc_no: "{name} isn't money: {reason}", tc_err: 'Could not convert — check URL / key / model.', uc_checking: 'Trying it...', uc_no: "{name} can't be eaten or drunk: {reason}", use_verb: 'uses {name}', set_announce: 'Announce eating / drinking in the chat (so the AI narrates it)',
         tag_weapon: 'weapon', tag_armor: 'armor', tag_clothing: 'clothing', tag_material: 'material', tag_food: 'food', tag_consumable: 'consumable', tag_misc: 'misc',
         toast_ate: 'You ate {name}. +{n} HP.', toast_ate_nohp: 'You ate {name}.',
-        set_capacity: 'Carry capacity:', set_gm: 'GM / edit mode (manual coins)',
+        add_item_title: 'Add an item by hand', add_item_name: 'Name', add_item_desc: 'Description',
+        add_item_weight: 'Weight', add_item_count: 'How many', add_item_usable: 'Can be used up',
+        add_item_ok: 'Put in the backpack', add_item_cancel: 'Cancel', add_item_working: 'Adding…',
+        add_item_need_name: 'It needs a name.', add_item_done: 'Added: {name} ×{n}',
+        set_capacity: 'Carry capacity:', set_gm: 'GM / edit mode — manual coins and items',
         inject_encumbered: '{{user}} is over-encumbered (carrying {w}/{cap}); movement is slow and tiring',
         card_title: 'Click — use in chat\nShift+Click — to Workbench',
         loot_found: 'You found items!', take_all: 'Take all', take_selected: 'Take selected', leave: 'Leave',
@@ -88,7 +92,11 @@ const I18N = {
         coins_label: 'Монеты', weight_label: 'Вес', eat: 'Съесть', coins_add: 'Добавить монеты', coins_sub: 'Убрать монеты', use_item: 'Использовать', used: '{name} использовано.', used_heal: '+{n} HP.', used_fed: 'Сытость +{n}.', used_buff: 'Эффект: {name}.', to_coins: 'Перевести в монеты', tc_checking: 'Пересчитываю...', tc_yes: 'Перевод: «{name}» → +{n} монет. {reason}', tc_no: '«{name}» — это не деньги: {reason}', tc_err: 'Не удалось перевести — проверь URL / ключ / модель.', uc_checking: 'Пробую...', uc_no: '«{name}» нельзя съесть или выпить: {reason}', use_verb: 'использует «{name}»', set_announce: 'Объявлять еду / питьё в чате (чтобы ИИ это отыграл)',
         tag_weapon: 'оружие', tag_armor: 'броня', tag_clothing: 'одежда', tag_material: 'материал', tag_food: 'еда', tag_consumable: 'расходник', tag_misc: 'прочее',
         toast_ate: 'Ты съел(а) {name}. +{n} HP.', toast_ate_nohp: 'Ты съел(а) {name}.',
-        set_capacity: 'Грузоподъёмность:', set_gm: 'GM / режим редактирования (монеты вручную)',
+        add_item_title: 'Добавить предмет вручную', add_item_name: 'Название', add_item_desc: 'Описание',
+        add_item_weight: 'Вес', add_item_count: 'Сколько', add_item_usable: 'Расходуемый',
+        add_item_ok: 'Положить в рюкзак', add_item_cancel: 'Отмена', add_item_working: 'Добавляю…',
+        add_item_need_name: 'Нужно название.', add_item_done: 'Добавлено: {name} ×{n}',
+        set_capacity: 'Грузоподъёмность:', set_gm: 'GM / режим редактирования — монеты и предметы вручную',
         inject_encumbered: '{{user}} перегружен(а) (несёт {w}/{cap}); движение медленное и утомительное',
         card_title: 'Клик — использовать в чате\nShift+Клик — на верстак',
         loot_found: 'Ты нашёл предметы!', take_all: 'Взять всё', take_selected: 'Взять выбранное', leave: 'Оставить',
@@ -384,18 +392,39 @@ function pruneOldStates() {
     if (changed) saveSettings();
 }
 
-function saveSettings(immediate = true) {
-    extension_settings[MODULE_NAME] = settings;
-    // Discrete changes (buying, selling, taking loot, crafting…) flush to disk right away, so a quick
-    // page reload can't lose coins or items (the debounced save can be ~1s late and get dropped on
-    // refresh). High-frequency per-message writes pass immediate=false to stay debounced. Same pattern
-    // as RPG-Equipment-Durability.
-    if (immediate && typeof stSaveSettings === 'function') {
+/* Every discrete change flushed the whole settings file to the server, on the main
+   thread. With a suite this size that is a visible pause — and adding ten items meant
+   ten of them, one after another, which is why the panel seemed to do nothing and
+   invited another click.
+
+   The write still happens, it is merely coalesced: a burst of changes costs one write,
+   and anything pending is flushed before the page closes or the chat changes. */
+let engSaveTimer = 0, engSavePending = false;
+
+function engFlushSettings() {
+    if (engSaveTimer) { clearTimeout(engSaveTimer); engSaveTimer = 0; }
+    if (!engSavePending) return;
+    engSavePending = false;
+    if (typeof stSaveSettings === 'function') {
         try { const p = stSaveSettings(); if (p && typeof p.catch === 'function') p.catch(() => { }); return; }
-        catch (e) { /* fall back to debounced below */ }
+        catch (e) { /* fall through */ }
     }
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
 }
+
+function saveSettings(immediate = true) {
+    extension_settings[MODULE_NAME] = settings;
+    if (immediate) {
+        engSavePending = true;
+        if (engSaveTimer) clearTimeout(engSaveTimer);
+        engSaveTimer = setTimeout(engFlushSettings, 400);
+        return;
+    }
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+}
+
+window.addEventListener('beforeunload', engFlushSettings);
+try { eventSource.on(event_types.CHAT_CHANGED, engFlushSettings); } catch (e) { }
 
 function loadGameState(explicitId) {
     const context = getContext();
@@ -539,6 +568,23 @@ async function callAI(systemPrompt, userPrompt, maxTokens = 3000) {
                 // here means even that failed, so say which of the two it was.
                 console.warn('[RPG Engine] unusable reply (' + (finish || 'no finish_reason') + '):', content.slice(0, 500));
                 throw new Error(finish === 'length' ? 'reply truncated' : 'bad JSON');
+            }
+
+            /* THE CUT-OFF EVENT TEXT.
+
+               finish_reason "length" means the model ran out of room mid-sentence — the
+               answer ends on a half-written word. parseLenientJSON repairs the JSON
+               around it and hands back a perfectly valid object, so a truncated event
+               was being SAVED as if it were finished. Nothing downstream could tell,
+               and it looked like the panel was clipping the text.
+
+               Asked again once, with more room. If it is cut off a second time the
+               salvaged text is used rather than nothing, because half an event still
+               beats no event. */
+            if (finish === 'length' && i === 0) {
+                console.warn('[RPG Engine] reply hit the token ceiling; asking again with more room');
+                maxTokens = Math.min(8000, Math.round(maxTokens * 1.8));
+                continue;
             }
             return parsed;
         } catch(e) { if(i===1) throw e; }
@@ -981,6 +1027,94 @@ function makeModalDraggable(elmnt, handle) {
     };
 }
 
+
+/* Manual item entry, GM mode only.
+
+   Everything the player normally finds comes in through normItem — loot, rewards, the
+   starting kit, gifts from other extensions — so this goes through the same door.
+   Weight, stacking and the bridges to Equipment and Vendors then work on a hand-made
+   item exactly as they do on a found one, with nothing to keep in sync.
+
+   Deliberately short: name, description, weight, count. Armour and attack belong to
+   the Equipment extension's own GM mode, which already knows how to set them. */
+function openAddItem() {
+    const old = document.getElementById('rpg-additem');
+    if (old) old.remove();
+
+    const box = document.createElement('div');
+    box.id = 'rpg-additem';
+    box.innerHTML = `
+        <div class="ai-dim"></div>
+        <div class="ai-card">
+            <div class="ai-title">${escapeHtml(t('add_item_title'))}</div>
+            <label>${escapeHtml(t('add_item_name'))}</label>
+            <input type="text" class="text_pole" id="ai-name" maxlength="80" autocomplete="off">
+            <label>${escapeHtml(t('add_item_desc'))}</label>
+            <textarea class="text_pole" id="ai-desc" rows="3" maxlength="400"></textarea>
+            <div class="ai-row">
+                <div><label>${escapeHtml(t('add_item_weight'))}</label>
+                    <input type="number" class="text_pole" id="ai-weight" value="1" min="0" max="99" step="0.1"></div>
+                <div><label>${escapeHtml(t('add_item_count'))}</label>
+                    <input type="number" class="text_pole" id="ai-count" value="1" min="1" max="99" step="1"></div>
+            </div>
+            <label class="checkbox_label ai-check"><input type="checkbox" id="ai-usable"> <span>${escapeHtml(t('add_item_usable'))}</span></label>
+            <div class="ai-actions">
+                <div class="menu_button" id="ai-cancel">${escapeHtml(t('add_item_cancel'))}</div>
+                <div class="menu_button ai-go" id="ai-ok">${escapeHtml(t('add_item_ok'))}</div>
+            </div>
+        </div>`;
+    document.body.appendChild(box);
+
+    const close = () => box.remove();
+    box.querySelector('.ai-dim').addEventListener('click', close);
+    box.querySelector('#ai-cancel').addEventListener('click', close);
+    box.querySelector('#ai-ok').addEventListener('click', () => {
+        const name = String(box.querySelector('#ai-name').value || '').trim();
+        if (!name) { toastr.warning(t('add_item_need_name')); return; }
+
+        const weight = Math.max(0, Math.min(99, parseFloat(box.querySelector('#ai-weight').value) || 0));
+        const count = Math.max(1, Math.min(99, parseInt(box.querySelector('#ai-count').value, 10) || 1));
+        const item = {
+            name,
+            description: String(box.querySelector('#ai-desc').value || '').trim(),
+            weight,
+            usable: !!box.querySelector('#ai-usable').checked
+        };
+
+        // Locked while it works: the button used to stay live and the card used to
+        // vanish at once, so a slow save looked like nothing had happened and the
+        // obvious response was to press again. Ten times, in this case.
+        const okBtn = box.querySelector('#ai-ok');
+        if (okBtn.classList.contains('ai-busy')) return;
+        okBtn.classList.add('ai-busy');
+        okBtn.textContent = t('add_item_working');
+
+        for (let i = 0; i < count; i++) gameState.inventory.push(normItem(item));
+
+        /* The card is dismissed BEFORE the redraw, not after. It used to close last,
+           so anything that threw while rebuilding the backpack left the form sitting
+           there looking as though nothing had happened — and the natural response is
+           to press the button again. The items are already in the array by this point;
+           the rest is presentation and is allowed to fail without hiding that. */
+        close();
+
+        try {
+            saveGameState();
+            updateInventoryGrid();
+            buildInjection();
+        } catch (e) {
+            console.error('[RPG Engine] add item: redraw failed', e);
+        }
+        toastr.success(t('add_item_done', { name: escapeHtml(name), n: count }));
+    });
+
+    // Enter in the name field is the same as pressing the button.
+    box.querySelector('#ai-name').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); box.querySelector('#ai-ok').click(); }
+    });
+    setTimeout(() => { try { box.querySelector('#ai-name').focus(); } catch (e) { } }, 30);
+}
+
 function updateInventoryGrid() {
     const keepScroll = grabEngScroll();
     const grid = $('#rpg-inv-grid');
@@ -992,15 +1126,22 @@ function updateInventoryGrid() {
     const head = $(`<div class="rpg-inv-head">
         <span class="rpg-coins-ctrl"><i class="fa-solid fa-coins"></i> <b>${gameState.coins || 0}</b> ${coinsEditor}</span>
         <span class="${totalW > cap ? 'over' : ''}"><i class="fa-solid fa-weight-hanging"></i> ${Math.round(totalW * 10) / 10} / ${cap}</span>
+        ${gm ? `<span class="rpg-add-ctrl" title="${escapeHtml(t('add_item_title'))}"><i class="fa-solid fa-plus rpg-item-add"></i></span>` : ''}
     </div>`);
     if (gm) {
         head.find('.rpg-coins-add').on('click', () => { const n = parseInt(head.find('.rpg-coins-in').val()) || 0; gameState.coins = Math.max(0, (gameState.coins || 0) + n); saveGameState(); updateInventoryGrid(); });
         head.find('.rpg-coins-sub').on('click', () => { const n = parseInt(head.find('.rpg-coins-in').val()) || 0; gameState.coins = Math.max(0, (gameState.coins || 0) - n); saveGameState(); updateInventoryGrid(); });
+        head.find('.rpg-item-add').on('click', openAddItem);
     }
     grid.append(head);
     
-    gameState.inventory.forEach((item, index) => {
-        const card = $(`<div class="rpg-item-card" data-id="${item.id}" draggable="true" title="${t('card_title')}">
+    /* Was one insert and five listeners PER CARD. At forty items that is forty
+       separate layout passes and two hundred listeners, rebuilt from scratch every
+       time anything changed — which is why adding one item took long enough to walk
+       away from. Built as a single string and handled by one delegated listener; the
+       item's index rides on the card, so every action resolves to the same call. */
+    const cards = gameState.inventory.map((item, index) => `
+        <div class="rpg-item-card" data-id="${item.id}" data-idx="${index}" draggable="true" title="${t('card_title')}">
                 <i class="fa-solid fa-trash rpg-item-delete" title="${t('discard')}"></i>
                 <span class="rpg-item-name">${escapeHtml(item.name)}</span>
                 <span class="rpg-item-desc">${escapeHtml(item.desc)}</span>
@@ -1008,28 +1149,42 @@ function updateInventoryGrid() {
                 <span class="rpg-item-tag rpg-tag-${item.type || 'misc'}">${escapeHtml(typeLabel(item.type))}${(typeof item.weight === 'number') ? ` · ⚖${item.weight}` : ''}</span>
                 <i class="fa-solid fa-mug-hot rpg-item-eat" title="${escapeHtml(t('use_item'))}"></i>
                 <i class="fa-solid fa-coins rpg-item-tocoins" title="${escapeHtml(t('to_coins'))}"></i>
-            </div>`);
-        card[0].addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', item.id); e.dataTransfer.effectAllowed = 'copy'; card.addClass('dragging'); });
-        card[0].addEventListener('dragend', () => card.removeClass('dragging'));
-        card.find('.rpg-item-tocoins').on('click', (e) => { e.stopPropagation(); convertToCoins(item, index); });
-        card.find('.rpg-item-eat').on('click', (e) => { e.stopPropagation(); useConsumable(item, index); });
+            </div>`).join('');
+    grid.append(cards);
 
-        card.find('.rpg-item-delete').on('click', (e) => {
-            e.stopPropagation(); gameState.inventory.splice(index, 1); saveGameState(); updateInventoryGrid();
-        });
+    const at = (el) => {
+        const card = el.closest('.rpg-item-card');
+        if (!card) return null;
+        const index = parseInt(card.dataset.idx, 10);
+        const item = gameState.inventory[index];
+        return item ? { card, index, item } : null;
+    };
 
-        card.on('click', (e) => {
-            if (e.shiftKey) {
-                if (!craftSlotBase) craftSlotBase = item; 
-                else if (!craftSlotMaterial && item.id !== craftSlotBase.id) craftSlotMaterial = item;
-                updateCraftZone();
-            } else {
-                useItemInChat(item);
-                $('#rpg-inventory-modal').removeClass('visible');
-            }
-        });
-        grid.append(card);
+    grid.off('.rpginv').on('click.rpginv', '.rpg-item-card', function (e) {
+        const hit = at(e.target); if (!hit) return;
+        if (e.target.closest('.rpg-item-tocoins')) { e.stopPropagation(); return convertToCoins(hit.item, hit.index); }
+        if (e.target.closest('.rpg-item-eat')) { e.stopPropagation(); return useConsumable(hit.item, hit.index); }
+        if (e.target.closest('.rpg-item-delete')) {
+            e.stopPropagation();
+            gameState.inventory.splice(hit.index, 1); saveGameState(); updateInventoryGrid();
+            return;
+        }
+        if (e.shiftKey) {
+            if (!craftSlotBase) craftSlotBase = hit.item;
+            else if (!craftSlotMaterial && hit.item.id !== craftSlotBase.id) craftSlotMaterial = hit.item;
+            updateCraftZone();
+        } else {
+            useItemInChat(hit.item);
+            $('#rpg-inventory-modal').removeClass('visible');
+        }
     });
+    grid.on('dragstart.rpginv', '.rpg-item-card', function (e) {
+        const ev = e.originalEvent || e;
+        ev.dataTransfer.setData('text/plain', this.dataset.id);
+        ev.dataTransfer.effectAllowed = 'copy';
+        this.classList.add('dragging');
+    });
+    grid.on('dragend.rpginv', '.rpg-item-card', function () { this.classList.remove('dragging'); });
     restoreEngScroll(keepScroll);
 }
 
@@ -1271,6 +1426,7 @@ function renderQuestPanelContent() {
             </div>
         </div></div>`);
         fitLetter();
+
         const emptyDrag = content.find('.dsp-empty-card')[0];
         if (emptyDrag) makeModalDraggable(document.getElementById('rpg-quest-modal'), emptyDrag);
         return;

@@ -443,6 +443,7 @@
 /* ---- item types, weight, coins, food (v1.3) ---- */
 .rpg-inv-head {
     flex-basis: 100%; width: 100%; display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 4px 8px;      /* a third control must not be pushed off the edge */
     font-family: 'Special Elite', monospace; font-size: 0.9rem; color: #5b5246;
     padding: 4px 8px 8px; margin-bottom: 4px; border-bottom: 1px dashed #c8b98f;
 }
@@ -530,9 +531,12 @@
     scrollbar-width:thin; scrollbar-color:#9a382d rgba(122,92,48,.12); }
 @keyframes dsp-fade { from{opacity:0;} to{opacity:1;} }
 #rpg-quest-content .dsp-body p { margin:0 0 10px; }
-#rpg-quest-content .dsp-body::-webkit-scrollbar { width:8px; }
-#rpg-quest-content .dsp-body::-webkit-scrollbar-track { background:rgba(122,92,48,.12); border-radius:5px; }
-#rpg-quest-content .dsp-body::-webkit-scrollbar-thumb { background:linear-gradient(180deg,#9a382d,var(--oxblood)); border-radius:5px; }
+/* The bar was there all along, thin and the colour of the paper — easy to read the
+   letter as cut off rather than as something you can push up. Wider, with a visible
+   groove, so it announces itself. */
+#rpg-quest-content .dsp-body::-webkit-scrollbar { width:11px; }
+#rpg-quest-content .dsp-body::-webkit-scrollbar-track { background:rgba(122,92,48,.22); border-radius:5px; box-shadow:inset 0 0 3px rgba(90,66,34,.28); }
+#rpg-quest-content .dsp-body::-webkit-scrollbar-thumb { background:linear-gradient(180deg,#b0432f,var(--oxblood)); border-radius:5px; border:1px solid rgba(90,30,22,.45); min-height:34px; }
 #rpg-quest-content .dsp-hint { font-family:"Alegreya",serif; font-style:italic; font-size:13px; color:var(--sepia); margin-top:8px; }
 
 #rpg-quest-content .dsp-reward { position:relative; margin:14px 0; display:flex; align-items:center; gap:11px;
@@ -604,3 +608,103 @@
     box-shadow: 0 2px 3px rgba(0,0,0,0.3);
 }
 #rpg-loot-popup .rpg-loot-card:not(.selected) .rpg-loot-check { display: none; }
+
+/* ---- manual item entry (GM mode) ---- */
+/* No margin-left:auto here. The header is a narrow column with space-between, so
+   pushing the button to the far end shoved it past the edge and out of sight. It sits
+   as a normal third item instead, next to the weight it belongs beside. */
+.rpg-inv-head .rpg-add-ctrl { flex: 0 0 auto; display: inline-flex; align-items: center; }
+.rpg-inv-head .rpg-item-add {
+    cursor: pointer; opacity: .8; padding: 3px 7px; border-radius: 5px; transition: .15s;
+    border: 1px solid #c8b98f; background: rgba(255,252,244,.6); color: #6f5a34;
+}
+.rpg-inv-head .rpg-item-add:hover { opacity: 1; background: rgba(122,92,48,.16); }
+
+#rpg-additem { position: fixed; inset: 0; z-index: 100001; display: flex; align-items: center; justify-content: center; }
+/* The dim used to be flat grey-black. Warmed to the panel's own brown and given a
+   soft centre, so the card sits in the same light as the rest of the engine. */
+#rpg-additem .ai-dim {
+    position: absolute; inset: 0;
+    background: radial-gradient(120% 90% at 50% 42%, rgba(58,40,20,.44), rgba(28,18,8,.72));
+    backdrop-filter: blur(1.5px);
+}
+#rpg-additem .ai-card {
+    position: relative; width: min(420px, 92vw); padding: 20px 22px 18px;
+    background-image: var(--rpg-paper-noise, none), linear-gradient(170deg, #f7f1e3, #ece1ca);
+    background-size: 150px 150px, auto;
+    border: 1px solid #d8ccae; border-top: 5px solid #7a5c30; border-radius: 8px;
+    box-shadow: 0 22px 60px rgba(0,0,0,.5);
+    color: #33312c; font-family: var(--rpg-type, Georgia, serif);
+    animation: ai-rise .22s ease-out both;
+}
+@keyframes ai-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+#rpg-additem .ai-title { font-weight: 700; font-size: 1.02rem; margin-bottom: 14px; letter-spacing: .5px; }
+#rpg-additem label { display: block; font-size: .74rem; text-transform: uppercase; letter-spacing: 1.4px; opacity: .6; margin: 10px 0 4px; }
+/* text_pole and menu_button are SillyTavern's own classes, and they carry its dark
+   theme: light text on a light control. On paper that is an empty field. Colours are
+   set here rather than dropping the classes, so the controls keep their sizing and
+   focus behaviour and only the palette changes. */
+#rpg-additem input.text_pole,
+#rpg-additem textarea.text_pole {
+    width: 100%; box-sizing: border-box;
+    background: #fdfaf1 !important;
+    color: #33312c !important;
+    border: 1px solid #c8b98f !important;
+    border-radius: 5px;
+    font-family: var(--rpg-type, Georgia, serif);
+    caret-color: #7a5c30;
+}
+#rpg-additem input.text_pole:focus,
+#rpg-additem textarea.text_pole:focus {
+    outline: none; border-color: #7a5c30 !important;
+    box-shadow: 0 0 0 2px rgba(122,92,48,.18);
+}
+#rpg-additem input.text_pole::placeholder,
+#rpg-additem textarea.text_pole::placeholder { color: #a99b7d !important; }
+/* SillyTavern's textarea sizing is meant for its own panels; on this card the
+   description needs room and the right to grow. */
+#rpg-additem textarea.text_pole { resize: vertical; min-height: 64px; line-height: 1.5; }
+#rpg-additem input.text_pole { height: auto; padding: 7px 9px; }
+
+/* Same shape as .rpg-craft-btn — the Upgrade Item button — so the form belongs to the
+   engine rather than looking like a stray dialog: the purple gradient, the inset
+   highlight, the lift on hover and the press on click. */
+#rpg-additem .menu_button {
+    background: linear-gradient(180deg, #b8a684, #9c8a68) !important;
+    border: 1px solid rgba(0,0,0,.22) !important;
+    color: #fdf6ea !important;
+    font-family: var(--rpg-type, Georgia, serif) !important;
+    font-weight: 600 !important;
+    font-size: .84rem !important;
+    padding: 9px 18px !important;
+    border-radius: 8px !important;
+    text-shadow: 0 1px 1px rgba(0,0,0,.28) !important;
+    box-shadow: 0 2px 3px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.22) !important;
+    opacity: 1 !important;
+    height: auto !important;
+    cursor: pointer;
+    transition: .18s;
+}
+/* One hover rule, not two. The second one painted the background pale on ANY button
+   in this form — so both the purple primary and the beige cancel turned white with
+   unreadable text the moment the pointer touched them. Brightness alone does the job
+   and keeps whatever colour the button already has. */
+#rpg-additem .menu_button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+#rpg-additem .menu_button:active { transform: translateY(1px); }
+/* The primary button wears the engine's own colour — the same purple gradient as
+   Upgrade Item — so the form reads as part of the panel and not as a stray dialog. */
+#rpg-additem .ai-go {
+    background: linear-gradient(180deg, #6b5077, #54395f) !important;
+    border-color: rgba(0,0,0,.25) !important;
+    color: #fdf6ea !important;
+    font-weight: 700 !important;
+}
+#rpg-additem .ai-check input[type="checkbox"] { accent-color: #7a5c30; }
+#rpg-additem .ai-row { display: flex; gap: 12px; }
+#rpg-additem .ai-row > div { flex: 1; }
+#rpg-additem .ai-check { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; text-transform: none; letter-spacing: 0; font-size: .82rem; opacity: .85; }
+#rpg-additem .ai-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+/* Merged into the rule above. As a separate line further down it won on specificity
+   ties and quietly undid the colour set there, which is why the button came out
+   white with unreadable text. */
+#rpg-additem .menu_button.ai-busy { pointer-events: none; opacity: .6 !important; }
