@@ -35,6 +35,8 @@ Copy the `Tavern RPG Engine` folder into your third-party extensions folder (e.g
 
 ## 🔎 Searching & loot
 
+<img width="426" height="221" alt="Screenshot_24" src="https://github.com/user-attachments/assets/41049c2e-e4a9-47a1-be91-6e0c7527f139" />
+
 Every character message gets a magnifying glass. Tap it and the model looks for one or two believable items in that message; a popup shows them with pickup chances. **Tap cards to include/exclude**, then **Take selected** (or Leave). Each message can be searched **once**, and — importantly — the scanner is told what's already in your backpack, so it won't keep re-offering items you've already grabbed. A search that errors out doesn't burn the attempt, so you can retry.
 
 ## 🛠️ Crafting, using & appraising
@@ -44,3 +46,8 @@ Drag one item onto another on the workbench to combine them — the model decide
 ## ✉️ Events & quests
 
 Every few messages a letter may arrive in the journal — a small, player-aimed hook with a reward. Accept it, roleplay it, and resolve it as success or failure; rewards land in your backpack.
+
+---
+## ✨ Screenshots
+
+<img width="1909" height="875" alt="Preview-Tavern RPG Engine (Inventory   Events)" src="https://github.com/user-attachments/assets/47444e51-3606-48d2-92b7-6cc0295d872d" />
