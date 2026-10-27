@@ -708,3 +708,30 @@
    ties and quietly undid the colour set there, which is why the button came out
    white with unreadable text. */
 #rpg-additem .menu_button.ai-busy { pointer-events: none; opacity: .6 !important; }
+
+/* give a thing to a character (RPG Status Bar + Bonds' Character tab keeps the pockets) */
+.rpg-item-give {
+    position: absolute; bottom: 6px; right: 52px; cursor: pointer; color: #b04a6e; opacity: 0.8; transition: 0.15s;
+}
+.rpg-item-give:hover, .rpg-item-give:focus-visible { opacity: 1; transform: scale(1.18); outline: none; }
+.rpg-give-pop {
+    position: absolute; z-index: 30; right: 4px; bottom: 26px; min-width: 150px; max-width: 220px; padding: 6px;
+    display: flex; flex-direction: column; gap: 4px; border-radius: 8px;
+    background: #f6eedb; border: 1px solid #b89a6a; box-shadow: 0 8px 18px rgba(40, 25, 10, .35); color: #3b2f22; cursor: default;
+}
+.rpg-give-h { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a6d45; padding: 0 2px; }
+.rpg-give-i { font: inherit; font-size: 12px; text-align: left; padding: 4px 8px; border-radius: 6px; cursor: pointer; background: rgba(176, 74, 110, .08); border: 1px solid rgba(176, 74, 110, .3); color: #4a2a35; }
+.rpg-give-i:hover, .rpg-give-i:focus-visible { background: rgba(176, 74, 110, .18); outline: none; }
+.rpg-give-note { font-size: 12px; font-style: italic; color: #6b5a44; line-height: 1.3; }
+
+/* settings: frames with an emoji each, as RPG Map / Character Lens */
+.rpg-engine-settings .rpg-eng-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 2px 0 6px; }
+.rpg-engine-settings .rpg-eng-top select { width: auto; margin: 0; }
+.rpg-engine-settings .rpg-eng-sub { margin: 8px 0; border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, .15)); border-radius: 8px; padding: 8px 10px 10px; background: rgba(0, 0, 0, .12); }
+.rpg-engine-settings .rpg-eng-subhead { font-weight: 700; margin: 0 0 6px; opacity: .92; }
+.rpg-engine-settings .rpg-eng-sub > .text_pole { width: 100%; box-sizing: border-box; margin: 0 0 5px; }
+.rpg-engine-settings .rpg-eng-srow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 3px 0; }
+.rpg-engine-settings .rpg-eng-srow > label { flex: 1; min-width: 0; font-size: .9em; line-height: 1.25; opacity: .88; }
+.rpg-engine-settings .rpg-eng-srow input[type="number"] { flex: 0 0 60px; width: 60px; margin: 0; text-align: center; }
+.rpg-engine-settings .rpg-eng-pair { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.rpg-engine-settings .checkbox_label { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0; line-height: 1.3; }

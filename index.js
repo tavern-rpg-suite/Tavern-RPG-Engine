@@ -65,6 +65,8 @@ const I18N = {
         insert_event: 'Insert event into chat', insert_title: 'Insert the event text into the input field',
         sealed: 'Sealed letter',
         set_title: 'RPG Engine (Inventory & Events)', set_enable: 'Enable Module',
+        give_to: 'Give to a character', give_who: 'Give to:', give_none: 'Nobody to give it to (turn on the Character tab in RPG Status Bar + Bonds).', give_full: 'No free pocket.',
+        sec_api: 'Connection', sec_events: 'Events', sec_bag: 'Backpack', sec_chat: 'In the chat',
         set_event_every: 'Event every', set_to: 'to', set_depth: 'Context injection depth:',
         set_lang: 'Language:', set_url: 'URL', set_key: 'API Key', set_model: 'Model',
         toast_restore: 'Backpack restored from the chat backup!',
@@ -108,6 +110,8 @@ const I18N = {
         insert_event: 'Вставить событие в чат', insert_title: 'Вставить текст события в поле ввода',
         sealed: 'Запечатанное письмо',
         set_title: 'RPG Engine (инвентарь и события)', set_enable: 'Включить модуль',
+        give_to: 'Отдать персонажу', give_who: 'Отдать:', give_none: 'Некому отдать (включи вкладку «Персонаж» в RPG Status Bar + Bonds).', give_full: 'Нет свободного кармана.',
+        sec_api: 'Подключение', sec_events: 'События', sec_bag: 'Рюкзак', sec_chat: 'В чате',
         set_event_every: 'Событие каждые', set_to: 'до', set_depth: 'Глубина вставки в контекст:',
         set_lang: 'Язык:', set_url: 'URL', set_key: 'API-ключ', set_model: 'Модель',
         toast_restore: 'Рюкзак восстановлен из резервной копии чата!',
@@ -1140,6 +1144,9 @@ function updateInventoryGrid() {
        time anything changed — which is why adding one item took long enough to walk
        away from. Built as a single string and handled by one delegated listener; the
        item's index rides on the card, so every action resolves to the same call. */
+    // RPG Status Bar + Bonds' Character tab keeps the characters' pockets: a thing can be handed over
+    const body = (window.RPG && window.RPG.body && window.RPG.body.available && window.RPG.body.isEnabled && window.RPG.body.isEnabled()) ? window.RPG.body : null;
+    const giveOn = !!body;
     const cards = gameState.inventory.map((item, index) => `
         <div class="rpg-item-card" data-id="${item.id}" data-idx="${index}" draggable="true" title="${t('card_title')}">
                 <i class="fa-solid fa-trash rpg-item-delete" title="${t('discard')}"></i>
@@ -1149,6 +1156,7 @@ function updateInventoryGrid() {
                 <span class="rpg-item-tag rpg-tag-${item.type || 'misc'}">${escapeHtml(typeLabel(item.type))}${(typeof item.weight === 'number') ? ` · ⚖${item.weight}` : ''}</span>
                 <i class="fa-solid fa-mug-hot rpg-item-eat" title="${escapeHtml(t('use_item'))}"></i>
                 <i class="fa-solid fa-coins rpg-item-tocoins" title="${escapeHtml(t('to_coins'))}"></i>
+                ${giveOn ? `<i class="fa-solid fa-gift rpg-item-give" title="${escapeHtml(t('give_to'))}" role="button" tabindex="0"></i>` : ''}
             </div>`).join('');
     grid.append(cards);
 
@@ -1164,6 +1172,7 @@ function updateInventoryGrid() {
         const hit = at(e.target); if (!hit) return;
         if (e.target.closest('.rpg-item-tocoins')) { e.stopPropagation(); return convertToCoins(hit.item, hit.index); }
         if (e.target.closest('.rpg-item-eat')) { e.stopPropagation(); return useConsumable(hit.item, hit.index); }
+        if (e.target.closest('.rpg-item-give')) { e.stopPropagation(); return openGive(hit.card, hit.item); }
         if (e.target.closest('.rpg-item-delete')) {
             e.stopPropagation();
             gameState.inventory.splice(hit.index, 1); saveGameState(); updateInventoryGrid();
@@ -1186,6 +1195,29 @@ function updateInventoryGrid() {
     });
     grid.on('dragend.rpginv', '.rpg-item-card', function () { this.classList.remove('dragging'); });
     restoreEngScroll(keepScroll);
+}
+
+// "give to…": a small list of the characters under the card; one click hands the thing over
+function openGive(card, item) {
+    $('.rpg-give-pop').remove();
+    const body = (window.RPG && window.RPG.body && window.RPG.body.available) ? window.RPG.body : null;
+    const who = body ? (body.cast() || []) : [];
+    const pop = $(`<div class="rpg-give-pop" role="menu"><div class="rpg-give-h">${escapeHtml(t('give_who'))}</div>${who.length
+        ? who.map(n => `<button type="button" class="rpg-give-i" data-who="${escapeHtml(n)}">${escapeHtml(n)}</button>`).join('')
+        : `<div class="rpg-give-note">${escapeHtml(t('give_none'))}</div>`}</div>`);
+    $(card).append(pop);
+    pop.on('click', '.rpg-give-i', function (e) {
+        e.stopPropagation();
+        const name = this.getAttribute('data-who');
+        const idx = gameState.inventory.findIndex(i => i.id === item.id);
+        if (idx < 0) { pop.remove(); return; }
+        const it = gameState.inventory[idx];
+        // taken out of the backpack only once the pocket has said yes
+        if (body.give(name, it)) { gameState.inventory.splice(idx, 1); saveGameState(); updateInventoryGrid(); }   // (a full pocket says so itself)
+        pop.remove();
+    });
+    pop.on('click', e => e.stopPropagation());
+    setTimeout(() => $(document).one('click.rpggive', () => pop.remove()), 0);
 }
 
 function updateCraftZone() {
@@ -1554,43 +1586,37 @@ function updateContextInjection() {
 }
 
 // === SETTINGS MENU ===
-function settingsHtml() { return `
+function settingsHtml() {
+    // open groups in frames, an emoji each, as RPG Map and Character Lens have them
+    const sub = (title, body) => `<div class="rpg-eng-sub"><div class="rpg-eng-subhead">${title}</div>${body}</div>`;
+    const row = (id, label, attrs) => `<div class="rpg-eng-srow"><label for="${id}">${label.replace(/:\s*$/, '')}</label><input type="number" id="${id}" class="text_pole" ${attrs}></div>`;
+    return `
 <div class="extension_settings rpg-engine-settings">
     <div class="inline-drawer">
         <div class="rpg-engine-toggle inline-drawer-header" style="cursor: pointer;">
             <b><i class="fa-solid fa-dice-d20"></i> ${t('set_title')}</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
-        <div class="inline-drawer-content" style="display: none; padding-top: 10px;">
-            <label class="checkbox_label"><input type="checkbox" id="rpg-eng-enabled"> ${t('set_enable')}</label>
-            <div class="flex-container alignitemscenter flexgap5 margin-b-10" style="margin-top:8px;">
-                <label>${t('set_lang')}</label>
-                <select id="rpg-eng-lang" class="text_pole" style="width:auto;">
+        <div class="inline-drawer-content" style="display: none; padding-top: 6px;">
+            <div class="rpg-eng-top">
+                <label class="checkbox_label"><input type="checkbox" id="rpg-eng-enabled"> ${t('set_enable')}</label>
+                <select id="rpg-eng-lang" class="text_pole" title="${escapeHtml(t('set_lang'))}" aria-label="${escapeHtml(t('set_lang'))}">
                     <option value="en">English</option>
                     <option value="ru">Русский</option>
                 </select>
             </div>
-            <hr class="sysHR">
-            <input type="text" id="rpg-eng-base" class="text_pole margin-b-10" placeholder="${t('set_url')}" style="width:100%;">
-            <input type="password" id="rpg-eng-key" class="text_pole margin-b-10" placeholder="${t('set_key')}" style="width:100%;">
-            <input type="text" id="rpg-eng-model" class="text_pole margin-b-10" placeholder="${t('set_model')}" style="width:100%;">
-            <hr class="sysHR">
-            <div class="flex-container alignitemscenter flexgap5 margin-b-10">
-                <label>${t('set_event_every')}</label>
-                <input type="number" id="rpg-eng-min" class="text_pole" min="1" style="width:50px;">
-                <label>${t('set_to')}</label>
-                <input type="number" id="rpg-eng-max" class="text_pole" min="2" style="width:50px;">
-            </div>
-            <div class="flex-container alignitemscenter flexgap5 margin-b-10">
-                <label>${t('set_depth')}</label>
-                <input type="number" id="rpg-eng-depth" class="text_pole" min="0" style="width:50px;">
-            </div>
-            <div class="flex-container alignitemscenter flexgap5 margin-b-10">
-                <label>${t('set_capacity')}</label>
-                <input type="number" id="rpg-eng-cap" class="text_pole" min="1" style="width:60px;">
-            </div>
-            <label class="checkbox_label"><input type="checkbox" id="rpg-eng-gm"> ${t('set_gm')}</label>
-            <label class="checkbox_label"><input type="checkbox" id="rpg-eng-announce"> ${t('set_announce')}</label>
+            ${sub(`🔌 ${t('sec_api')}`, `
+                <input type="text" id="rpg-eng-base" class="text_pole" placeholder="${t('set_url')}" aria-label="${escapeHtml(t('set_url'))}">
+                <input type="password" id="rpg-eng-key" class="text_pole" placeholder="${t('set_key')}" aria-label="${escapeHtml(t('set_key'))}">
+                <input type="text" id="rpg-eng-model" class="text_pole" placeholder="${t('set_model')}" aria-label="${escapeHtml(t('set_model'))}">`)}
+            ${sub(`✉️ ${t('sec_events')}`, `
+                <div class="rpg-eng-srow"><label for="rpg-eng-min">${t('set_event_every')}</label><span class="rpg-eng-pair"><input type="number" id="rpg-eng-min" class="text_pole" min="1"> ${t('set_to')} <input type="number" id="rpg-eng-max" class="text_pole" min="2"></span></div>
+                ${row('rpg-eng-depth', t('set_depth'), 'min="0"')}`)}
+            ${sub(`🎒 ${t('sec_bag')}`, `
+                ${row('rpg-eng-cap', t('set_capacity'), 'min="1"')}
+                <label class="checkbox_label"><input type="checkbox" id="rpg-eng-gm"> <span>${t('set_gm')}</span></label>`)}
+            ${sub(`💬 ${t('sec_chat')}`, `
+                <label class="checkbox_label"><input type="checkbox" id="rpg-eng-announce"> <span>${t('set_announce')}</span></label>`)}
         </div>
     </div>
 </div>
@@ -1618,8 +1644,11 @@ function setupUI() {
     $('#rpg-eng-announce').prop('checked', settings.announceUse !== false).on('change', function() { settings.announceUse = this.checked; saveSettings(); });
     $('#rpg-eng-lang').val(settings.language || 'en').on('change', function() {
         settings.language = $(this).val(); saveSettings();
+        // rebuilt where it was, not at the end of the list
+        const mark = $('<div class="rpg-eng-mark"></div>').insertBefore($('.rpg-engine-settings').first());
         $('.rpg-engine-settings').remove();
         setupUI();
+        mark.replaceWith($('.rpg-engine-settings').detach());
         $('.rpg-engine-settings .inline-drawer-content').show();
         $('.rpg-engine-settings .inline-drawer-icon').removeClass('down').addClass('up');
         renderMainUI();
