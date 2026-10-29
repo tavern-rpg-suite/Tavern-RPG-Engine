@@ -1148,7 +1148,7 @@ function updateInventoryGrid() {
     const body = (window.RPG && window.RPG.body && window.RPG.body.available && window.RPG.body.isEnabled && window.RPG.body.isEnabled()) ? window.RPG.body : null;
     const giveOn = !!body;
     const cards = gameState.inventory.map((item, index) => `
-        <div class="rpg-item-card" data-id="${item.id}" data-idx="${index}" draggable="true" title="${t('card_title')}">
+        <div class="rpg-item-card" data-id="${escapeHtml(item.id)}" data-idx="${index}" draggable="true" title="${t('card_title')}">
                 <i class="fa-solid fa-trash rpg-item-delete" title="${t('discard')}"></i>
                 <span class="rpg-item-name">${escapeHtml(item.name)}</span>
                 <span class="rpg-item-desc">${escapeHtml(item.desc)}</span>
