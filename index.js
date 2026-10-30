@@ -2,7 +2,11 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, saveSettings as stSaveSettings, setExtensionPrompt, extension_prompt_roles, characters } from '../../../../script.js';
 
 const MODULE_NAME = 'tavern_rpg_engine';
-const PROMPT_KEY = 'rpg_status_injection';
+/* RPG Status Bar & Bonds writes under 'rpg_status_injection' too: whichever wrote last erased
+   the other — an accepted event vanished from what the model is told the moment the status bar
+   updated (or cleared its own slot). A key of its own; it sorts right after the old one, so the
+   injections keep their order. The text that goes to the model is unchanged. */
+const PROMPT_KEY = 'rpg_status_injection_engine';
 
 const defaultSettings = {
     enabled: false,
@@ -1371,7 +1375,8 @@ Output strictly JSON:
         if (!ownsChat(myChat)) return;
 
         const title = aiName(result && result.title, null, 80);
-        const desc = aiName(result && result.desc, null, 600);
+        // the whole description: it used to be cut at 600 characters, mid-word — a long event lost its end
+        const desc = aiName(result && result.desc, null, 6000);
         if (!title || !desc) { // empty OR junk ("-1", numbers) — don't show a broken card, retry soon
             gameState.messagesUntilEvent = 2; saveGameState();
             return;
@@ -1449,6 +1454,7 @@ function renderQuestPanelContent() {
     const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h13M11 6l6 6-6 6M20 5v14"/></svg>';
 
     if (!gameState.activeEvent) {
+        content.removeData('evKey');
         content.html(`<div class="dsp-fit"><div class="dsp dsp-empty">
             <div class="dsp-empty-card">
                 <div class="dsp-empty-stamp">${escapeHtml(t('no_mail'))}</div>
@@ -1477,7 +1483,13 @@ function renderQuestPanelContent() {
         : `<button class="dsp-btn dsp-accept" id="rpg-q-win">${CHECK}${escapeHtml(t('complete'))}</button>
            <button class="dsp-btn dsp-ignore" id="rpg-q-fail">${XC}${escapeHtml(t('fail'))}</button>`;
 
-    content.html(`<div class="dsp-fit"><div class="dsp">
+    /* The same letter drawn again (accepted, language switched, panel reopened while open): it
+       stays where it is. Playing the arrival again made it slide back into its envelope and out —
+       the event seemed to vanish and come back. A new event still arrives with the whole show. */
+    const evKey = `${e.title}\u0001${e.desc}`;
+    const still = content.data('evKey') === evKey && content.find('.dsp-letter').length > 0;
+    content.data('evKey', evKey);
+    content.html(`<div class="dsp-fit"><div class="dsp${still ? ' dsp-still' : ''}">
         <div class="dsp-stack">
             <div class="dsp-envelope"></div>
             ${dispatchSealSvg()}
