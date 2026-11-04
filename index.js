@@ -18,6 +18,7 @@ const defaultSettings = {
     eventMinMessages: 10,
     eventMaxMessages: 30,
     injectDepth: 1,
+    inChat: false,          // off: the note goes to the top of the prompt, as always; on: into the chat at the depth (a local model then re-reads only the end)
     language: 'en',
     carryCapacity: 50,
     gmMode: false,
@@ -71,7 +72,7 @@ const I18N = {
         set_title: 'RPG Engine (Inventory & Events)', set_enable: 'Enable Module',
         give_to: 'Give to a character', give_who: 'Give to:', give_none: 'Nobody to give it to (turn on the Character tab in RPG Status Bar + Bonds).', give_full: 'No free pocket.',
         sec_api: 'Connection', sec_events: 'Events', sec_bag: 'Backpack', sec_chat: 'In the chat',
-        set_event_every: 'Event every', set_to: 'to', set_depth: 'Context injection depth:',
+        set_event_every: 'Event every', set_to: 'to', set_depth: 'Context injection depth:', set_inchat: 'Insert in chat', set_depth_off: 'Works with "Insert in chat"',
         set_lang: 'Language:', set_url: 'URL', set_key: 'API Key', set_model: 'Model',
         toast_restore: 'Backpack restored from the chat backup!',
         toast_starting: 'Starting items added to your backpack!',
@@ -116,7 +117,7 @@ const I18N = {
         set_title: 'RPG Engine (инвентарь и события)', set_enable: 'Включить модуль',
         give_to: 'Отдать персонажу', give_who: 'Отдать:', give_none: 'Некому отдать (включи вкладку «Персонаж» в RPG Status Bar + Bonds).', give_full: 'Нет свободного кармана.',
         sec_api: 'Подключение', sec_events: 'События', sec_bag: 'Рюкзак', sec_chat: 'В чате',
-        set_event_every: 'Событие каждые', set_to: 'до', set_depth: 'Глубина вставки в контекст:',
+        set_event_every: 'Событие каждые', set_to: 'до', set_depth: 'Глубина вставки в контекст:', set_inchat: 'Вставлять в чат', set_depth_off: 'Работает с «Вставлять в чат»',
         set_lang: 'Язык:', set_url: 'URL', set_key: 'API-ключ', set_model: 'Модель',
         toast_restore: 'Рюкзак восстановлен из резервной копии чата!',
         toast_starting: 'Стартовые предметы добавлены в рюкзак!',
@@ -1337,10 +1338,12 @@ eventSource.on(event_types.MESSAGE_SENT, (messageId) => {
 });
 
 // === EVENT SYSTEM (PLAYER-FOCUSED) ===
-async function checkEventTrigger() {
+async function checkEventTrigger(messageId) {
     if (!settings.enabled) return;
     syncChat();                       // make sure we count against the chat that is actually open
     if (gameState.activeEvent) return;
+    // one reply counts once: a swipe or a regeneration of the same reply fires this again
+    if (Number.isInteger(messageId)) { if (gameState.evtTickId === messageId) return; gameState.evtTickId = messageId; }
 
     // self-heal: empty/broken counter or above the new max -> recompute by the current interval
     if (!Number.isFinite(gameState.messagesUntilEvent) || gameState.messagesUntilEvent > evtRange().hi) {
@@ -1581,6 +1584,8 @@ function clearEvent() {
     gameState.activeEvent = null; saveGameState(); renderQuestPanelContent(); updateContextInjection();
 }
 
+// where the note goes: the top of the prompt (as always), or the chat at its depth
+function injPos() { return settings.inChat ? 1 : 2; }
 function updateContextInjection() {
     if (!settings.enabled || settings.injectDepth < 0) return;
     let text = "";
@@ -1594,7 +1599,7 @@ function updateContextInjection() {
     const totalW = gameState.inventory.reduce((sum, i) => sum + ((typeof i.weight === 'number') ? i.weight : 1), 0);
     const cap = settings.carryCapacity || 50;
     if (totalW > cap) text += `\n[${t('inject_encumbered', { w: Math.round(totalW * 10) / 10, cap: cap })}]\n`;
-    setExtensionPrompt(PROMPT_KEY, text, 2, settings.injectDepth, false, extension_prompt_roles.SYSTEM);
+    setExtensionPrompt(PROMPT_KEY, text, injPos(), settings.injectDepth, false, extension_prompt_roles.SYSTEM);
 }
 
 // === SETTINGS MENU ===
@@ -1623,7 +1628,8 @@ function settingsHtml() {
                 <input type="text" id="rpg-eng-model" class="text_pole" placeholder="${t('set_model')}" aria-label="${escapeHtml(t('set_model'))}">`)}
             ${sub(`✉️ ${t('sec_events')}`, `
                 <div class="rpg-eng-srow"><label for="rpg-eng-min">${t('set_event_every')}</label><span class="rpg-eng-pair"><input type="number" id="rpg-eng-min" class="text_pole" min="1"> ${t('set_to')} <input type="number" id="rpg-eng-max" class="text_pole" min="2"></span></div>
-                ${row('rpg-eng-depth', t('set_depth'), 'min="0"')}`)}
+                ${row('rpg-eng-depth', t('set_depth'), 'min="0"')}
+                <label class="checkbox_label"><input type="checkbox" id="rpg-eng-inchat"> <span>${t('set_inchat')}</span></label>`)}
             ${sub(`🎒 ${t('sec_bag')}`, `
                 ${row('rpg-eng-cap', t('set_capacity'), 'min="1"')}
                 <label class="checkbox_label"><input type="checkbox" id="rpg-eng-gm"> <span>${t('set_gm')}</span></label>`)}
@@ -1651,6 +1657,10 @@ function setupUI() {
     $('#rpg-eng-min').val(settings.eventMinMessages).on('change', function() { settings.eventMinMessages = Math.max(1, parseInt($(this).val()) || 10); $(this).val(settings.eventMinMessages); saveSettings(); });
     $('#rpg-eng-max').val(settings.eventMaxMessages).on('change', function() { settings.eventMaxMessages = Math.max(2, parseInt($(this).val()) || 30); $(this).val(settings.eventMaxMessages); saveSettings(); });
     $('#rpg-eng-depth').val(settings.injectDepth).on('change', function() { settings.injectDepth = Math.max(0, parseInt($(this).val()) || 0); $(this).val(settings.injectDepth); saveSettings(); });
+    // the depth only means something in the chat: at the top of the prompt SillyTavern ignores it
+    const depthLock = () => $('#rpg-eng-depth').css('opacity', settings.inChat ? '' : '0.55').attr('title', settings.inChat ? '' : t('set_depth_off'));
+    $('#rpg-eng-inchat').prop('checked', !!settings.inChat).on('change', function() { settings.inChat = this.checked; saveSettings(); depthLock(); updateContextInjection(); });
+    depthLock();
     $('#rpg-eng-cap').val(settings.carryCapacity).on('change', function() { settings.carryCapacity = Math.max(1, parseInt($(this).val()) || 50); saveSettings(); updateContextInjection(); });
     $('#rpg-eng-gm').prop('checked', settings.gmMode).on('change', function() { settings.gmMode = this.checked; saveSettings(); updateInventoryGrid(); });
     $('#rpg-eng-announce').prop('checked', settings.announceUse !== false).on('change', function() { settings.announceUse = this.checked; saveSettings(); });
@@ -1696,7 +1706,7 @@ jQuery(() => {
 
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, () => { restoreMagnifyingGlasses(); });
     eventSource.on(event_types.MESSAGE_EDITED, () => { restoreMagnifyingGlasses(); });
-    eventSource.on(event_types.MESSAGE_RECEIVED, async () => { await checkEventTrigger(); });
+    eventSource.on(event_types.MESSAGE_RECEIVED, async (id) => { await checkEventTrigger(Number(id)); });
 });
 // ============================================================
 // CROSS-EXTENSION BRIDGE — lets Vendors (and others) read/modify the backpack.
