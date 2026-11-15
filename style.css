@@ -1,5 +1,19 @@
-@import url('https://fonts.googleapis.com/css2?family=Special+Elite&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,500;0,700;0,800;1,500&family=Caveat:wght@600&family=PT+Mono&display=swap');
+/* fonts: kept in the extension's own folder (fonts/, licences there) — nothing is loaded from the internet */
+@font-face { font-family: 'Special Elite'; font-style: normal; font-weight: 400; font-display: swap; src: url('fonts/special-elite-latin-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 400; font-display: swap; src: url('fonts/alegreya-cyrillic-400-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 400; font-display: swap; src: url('fonts/alegreya-latin-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 500; font-display: swap; src: url('fonts/alegreya-cyrillic-500-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 500; font-display: swap; src: url('fonts/alegreya-latin-500-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 700; font-display: swap; src: url('fonts/alegreya-cyrillic-700-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 700; font-display: swap; src: url('fonts/alegreya-latin-700-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 800; font-display: swap; src: url('fonts/alegreya-cyrillic-800-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Alegreya'; font-style: normal; font-weight: 800; font-display: swap; src: url('fonts/alegreya-latin-800-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Alegreya'; font-style: italic; font-weight: 500; font-display: swap; src: url('fonts/alegreya-cyrillic-500-italic.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Alegreya'; font-style: italic; font-weight: 500; font-display: swap; src: url('fonts/alegreya-latin-500-italic.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Caveat'; font-style: normal; font-weight: 600; font-display: swap; src: url('fonts/caveat-cyrillic-600-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Caveat'; font-style: normal; font-weight: 600; font-display: swap; src: url('fonts/caveat-latin-600-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'PT Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('fonts/pt-mono-cyrillic-400-normal.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'PT Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('fonts/pt-mono-latin-400-normal.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 
 /* ============================================================
    TAVERN RPG ENGINE — "LIVING PAPER" THEME (v2.0)
@@ -447,6 +461,8 @@
     font-family: 'Special Elite', monospace; font-size: 0.9rem; color: #5b5246;
     padding: 4px 8px 8px; margin-bottom: 4px; border-bottom: 1px dashed #c8b98f;
 }
+/* the coins-and-weight line spans the whole backpack grid (it took the place of one card) */
+.rpg-items-grid > .rpg-inv-head { grid-column: 1 / -1; }
 .rpg-inv-head i.fa-coins { color: #c9a44a; }
 .rpg-inv-head .over { color: #b0432f; }
 .rpg-item-tag {
@@ -742,3 +758,39 @@
 #rpg-quest-content .dsp-still .dsp-body { animation:none; }
 #rpg-quest-content .dsp-still .dsp-badge { animation:dsp-pop .3s both; }
 #rpg-quest-content .dsp-still .dsp-seal { animation:dsp-sway 3.6s ease-in-out infinite; }
+
+/* the backpack on a phone: the whole width under the top bar, the cards above, the workbench in one row below.
+   SillyTavern's phone layout transforms the page, so the box is placed by explicit sizes, not by inset. */
+@media (max-width: 640px) {
+    #rpg-inventory-modal {
+        left: 6px !important; top: calc(var(--topBarBlockSize, 36px) + 14px) !important;
+        width: calc(100vw - 12px); max-width: none; padding-left: 14px;
+    }
+    #rpg-inventory-modal::before { width: 14px; }
+    #rpg-inventory-modal::after { top: -10px; left: -6px; width: 28px; height: 28px; line-height: 26px; font-size: 15px; }
+    #rpg-inventory-modal .rpg-modal-header { padding: 11px 12px; }
+    #rpg-inventory-modal .rpg-modal-close { padding: 6px 8px; margin: -6px -6px -6px 0; }
+    .rpg-inv-body { flex-direction: column; height: min(calc(100dvh - var(--topBarBlockSize, 36px) - 96px), 640px); }
+    .rpg-items-grid {
+        flex: 1 1 auto; min-height: 0; padding: 12px 10px; gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+        border-right: 0; border-bottom: 1px dashed rgba(120, 100, 60, 0.3);
+    }
+    .rpg-craft-zone { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 8px; padding: 10px 10px 12px; }
+    .rpg-craft-title { flex-basis: 100%; justify-content: center; margin-bottom: 0; }
+    .rpg-craft-slot { flex: 1 1 0; width: auto; min-width: 0; min-height: 56px; margin: 0; }
+    .rpg-craft-plus { margin: 0; }
+    .rpg-craft-btn { flex-basis: 100%; margin-top: 2px; }
+    #rpg-loot-popup { width: min(360px, calc(100vw - 24px)); box-sizing: border-box; }
+}
+/* the found-things card on narrower screens: SillyTavern transforms the page there, so "the middle of the
+   screen" moved up off the top; it is placed under the top bar instead, and scrolls if the list is long */
+@media (max-width: 1000px) {
+    #rpg-loot-popup {
+        top: calc(var(--topBarBlockSize, 36px) + 40px); transform: translateX(-50%) rotate(-0.8deg);
+        max-height: calc(100dvh - var(--topBarBlockSize, 36px) - 70px); overflow-y: auto;
+    }
+}
+@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+    #rpg-inventory-modal.visible { animation: none; }
+}
