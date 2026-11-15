@@ -1674,9 +1674,22 @@ function setupUI() {
         $('.rpg-engine-settings .inline-drawer-content').show();
         $('.rpg-engine-settings .inline-drawer-icon').removeClass('down').addClass('up');
         renderMainUI();
+        relabelEngine();
         renderQuestPanelContent();
         updateInventoryGrid();
     });
+}
+/* The backpack and the letter windows are built once; a language switch left their fixed words
+   (title, workbench, slots, buttons) in the old language. They follow it now. */
+function relabelEngine() {
+    $('#rpg-inv-drag > span').html(`<i class="fa-solid fa-suitcase"></i> ${escapeHtml(t('inv_title'))}`);
+    $('#rpg-quest-drag > span').html(`<i class="fa-solid fa-envelope-open-text"></i> ${escapeHtml(t('letter'))}`);
+    $('#rpg-inventory-modal .rpg-craft-title').html(`<i class="fa-solid fa-hammer"></i> ${escapeHtml(t('workbench'))}`);
+    $('#rpg-slot-base, #rpg-slot-mat').attr('title', t('click_to_remove'));
+    $('#rpg-craft-action').text(t('upgrade_item'));
+    $('#rpg-inventory-btn').attr('title', t('btn_backpack'));
+    $('#rpg-quest-toggle-btn').attr('title', t('btn_quests'));
+    updateCraftZone();
 }
 
 jQuery(() => {
