@@ -1,5 +1,6 @@
 import { getContext, extension_settings } from '../../../extensions.js';
 import { eventSource, event_types, saveChatDebounced, saveSettingsDebounced, saveSettings as stSaveSettings, setExtensionPrompt, extension_prompt_roles, characters } from '../../../../script.js';
+import './suite-core.js';   // the suite's shared core: one seal for the floating buttons, the request queue, one "when and where"
 
 const MODULE_NAME = 'tavern_rpg_engine';
 /* RPG Status Bar & Bonds writes under 'rpg_status_injection' too: whichever wrote last erased
@@ -1831,4 +1832,15 @@ window.RPG.quest = {
     },
     removeForage: (id) => { syncChat(); return removeForageQuest(id); },
     markFound: (name) => { syncChat(); return markForageFound(name); }
+};
+// (Codex investigation) the event card for other extensions: a copy, read-only — and "won", which does
+// exactly what the letter's own "Complete" button does (the reward goes to the backpack, the card closes).
+window.RPG.quest.event = () => { try { syncChat(); const e = gameState.activeEvent; return e ? { title: e.title, desc: e.desc, status: e.status, reward: e.reward ? { name: e.reward.name, desc: e.reward.desc || '' } : null } : null; } catch (err) { return null; } };
+window.RPG.quest.completeEvent = (title) => {
+    syncChat();
+    const e = gameState.activeEvent;
+    if (!e || e.status !== 'accepted' || (title && e.title !== title)) return false;
+    if (e.reward) { gameState.inventory.push(normItem(e.reward)); toastr.success(t('toast_reward', { name: e.reward.name })); }
+    clearEvent(); $('#rpg-quest-modal').removeClass('visible');
+    return true;
 };
